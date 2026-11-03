@@ -1,0 +1,22 @@
+# Dependencies
+/node_modules/
+.pnpm-store/
+
+# Build artifacts (root level only)
+/dist/
+/dist-electron/
+/release/
+/out/
+
+# Internal planning & PRD documents
+/docs/
+*.tmp
+*.log
+
+# Environment & Config
+.env
+.env.local
+.DS_Store
+Thumbs.db
+anonymous.json
+history.json
