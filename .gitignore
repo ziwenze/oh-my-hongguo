@@ -11,6 +11,7 @@
 # Local draft notes
 docs/*.draft.md
 docs/*.local.md
+poc_report.json
 *.tmp
 *.log
 
