@@ -13,6 +13,10 @@ const api: IElectronAPI = {
   getShortRank: (options) => ipcRenderer.invoke('sdk:getShortRank', options),
 
   resolvePlaybackSource: (episodeId) => ipcRenderer.invoke('sdk:resolvePlaybackSource', episodeId),
+  startSession: (session) => ipcRenderer.invoke('playback:startSession', session),
+  updateSessionProgress: (progress) => ipcRenderer.invoke('playback:updateProgress', progress),
+  getCurrentSession: () => ipcRenderer.invoke('playback:getCurrentSession'),
+  closeSession: () => ipcRenderer.invoke('playback:closeSession'),
 
   getHistory: () => ipcRenderer.invoke('store:getHistory'),
   saveHistory: (item) => ipcRenderer.invoke('store:saveHistory', item),

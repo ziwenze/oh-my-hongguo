@@ -2,6 +2,7 @@
   "name": "oh-my-hongguo",
   "version": "0.1.0",
   "description": "Desktop client for short drama discovery and playback",
+  "author": "Oh-My-Hongguo Contributors",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
@@ -10,7 +11,9 @@
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test 'tests/**/*.test.mjs'",
-    "test:poc": "node scripts/poc_inspect.mjs"
+    "test:poc": "node scripts/poc_inspect.mjs",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir"
   },
   "dependencies": {
     "openhongguo": "file:./vendor/openhongguo",
@@ -26,6 +29,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "electron": "45.2.1",
+    "electron-builder": "26.18.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",

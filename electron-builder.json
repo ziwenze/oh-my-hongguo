@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.ziwenze.oh-my-hongguo",
+  "productName": "Oh-My-Hongguo",
+  "copyright": "Copyright © 2026 Oh-My-Hongguo Contributors",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "package.json",
+    "vendor/openhongguo/**/*"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "vendor/openhongguo/dist/**/*"
+  ],
+  "electronDownload": {
+    "cache": "/tmp/electron-cache"
+  },
+  "mac": {
+    "target": ["dmg", "zip"],
+    "category": "public.app-category.entertainment",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false
+  },
+  "win": {
+    "target": ["nsis", "portable"]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

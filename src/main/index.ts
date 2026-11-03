@@ -4,7 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sdkAdapter } from './sdk/adapter.js';
 import { dataStore } from './store/dataStore.js';
-import type { FavoriteItem, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
+import { playbackCoordinator } from './session/coordinator.js';
+import { setupSystemTray } from './tray.js';
+import type { FavoriteItem, PlaybackSessionState, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
 
 const { app, BrowserWindow, ipcMain, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -178,6 +180,34 @@ function registerIpcHandlers() {
     return await sdkAdapter.resolvePlayback(episodeId.trim());
   });
 
+  // 7.5 播放会话协调与断点同步
+  ipcMain.handle('playback:startSession', async (event, session: unknown) => {
+    assertSender(event);
+    if (!session || typeof session !== 'object') {
+      throw new TypeError('[IPC] session must be an object');
+    }
+    return await playbackCoordinator.startSession(session as Omit<PlaybackSessionState, 'isPlaying'>);
+  });
+
+  ipcMain.handle('playback:updateProgress', async (event, progress: unknown) => {
+    assertSender(event);
+    if (!progress || typeof progress !== 'object') return;
+    const p = progress as { positionSeconds: number; durationSeconds?: number };
+    if (typeof p.positionSeconds === 'number') {
+      await playbackCoordinator.updateProgress(p);
+    }
+  });
+
+  ipcMain.handle('playback:getCurrentSession', async (event) => {
+    assertSender(event);
+    return playbackCoordinator.getCurrentSession();
+  });
+
+  ipcMain.handle('playback:closeSession', async (event) => {
+    assertSender(event);
+    await playbackCoordinator.closeSession();
+  });
+
   // 8. 历史记录
   ipcMain.handle('store:getHistory', async (event) => {
     assertSender(event);
@@ -251,6 +281,9 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers();
   createWindow();
+  if (mainWindow) {
+    setupSystemTray(mainWindow);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

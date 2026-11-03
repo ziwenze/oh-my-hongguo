@@ -4,6 +4,7 @@ import type { DramaSummary } from '../shared/types.js';
 import { Navbar } from './components/Navbar.js';
 import { EpisodeDrawer } from './components/EpisodeDrawer.js';
 import { SearchModal } from './components/SearchModal.js';
+import { PlayerModal } from './components/PlayerModal.js';
 import { DiscoverView } from './views/DiscoverView.js';
 import { RankingView } from './views/RankingView.js';
 import { LibraryView } from './views/LibraryView.js';
@@ -18,7 +19,13 @@ export default function App() {
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   const [searchCue, setSearchCue] = useState('');
 
-  const { openDramaDetail, closeDramaDetail, selectedDrama } = useDramaStore();
+  const [activePlayback, setActivePlayback] = useState<{
+    drama: DramaSummary;
+    episodeId: string;
+    initialPosition?: number;
+  } | null>(null);
+
+  const { openDramaDetail, closeDramaDetail, selectedDrama, episodes } = useDramaStore();
   const { loadLibrary } = useLibraryStore();
 
   useEffect(() => {
@@ -35,7 +42,6 @@ export default function App() {
   // 全局键盘快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 忽略在输入框内的按键
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
@@ -43,7 +49,9 @@ export default function App() {
         e.preventDefault();
         handleTogglePin();
       } else if (e.key === 'Escape') {
-        if (selectedDrama) {
+        if (activePlayback) {
+          handleClosePlayer();
+        } else if (selectedDrama) {
           closeDramaDetail();
         }
       }
@@ -51,16 +59,41 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedDrama, closeDramaDetail]);
+  }, [selectedDrama, activePlayback, closeDramaDetail]);
 
   const handleTogglePin = async () => {
     const nextState = await window.electronAPI.toggleAlwaysOnTop();
     setIsAlwaysOnTop(nextState);
   };
 
-  const handlePlayEpisode = (episodeId: string, episodeNumber: number) => {
-    // 阶段 3 准入与环境说明提示
-    alert(`[阶段 0 决策门槛准入提示]\n正在请求分集：第 ${episodeNumber} 集 (ID: ${episodeId})\n依据 AGENTS.md 规范，媒体播放引擎正按阶段 0 准入要求进行兼容性与授权评估。`);
+  const handlePlayEpisode = (episodeId: string) => {
+    if (!selectedDrama) return;
+    setActivePlayback({
+      drama: selectedDrama,
+      episodeId,
+      initialPosition: 0,
+    });
+  };
+
+  const handleResumeHistory = async (seriesId: string, episodeId: string, _num: number, position: number) => {
+    try {
+      const detail = await window.electronAPI.getDramaDetail(seriesId);
+      if (detail) {
+        await openDramaDetail(detail);
+        setActivePlayback({
+          drama: detail,
+          episodeId,
+          initialPosition: position,
+        });
+      }
+    } catch (err) {
+      console.warn('[App] Failed to resume history:', err);
+    }
+  };
+
+  const handleClosePlayer = async () => {
+    setActivePlayback(null);
+    await loadLibrary();
   };
 
   const handleSelectDrama = (drama: DramaSummary) => {
@@ -94,7 +127,7 @@ export default function App() {
           {activeTab === 'library' && (
             <LibraryView
               onSelectDrama={handleSelectDrama}
-              onPlayEpisode={(_, epId, num) => handlePlayEpisode(epId, num)}
+              onPlayEpisode={handleResumeHistory}
             />
           )}
 
@@ -102,7 +135,21 @@ export default function App() {
         </main>
 
         {/* 选集与详情抽屉 */}
-        <EpisodeDrawer onPlayEpisode={handlePlayEpisode} />
+        <EpisodeDrawer onPlayEpisode={(epId) => handlePlayEpisode(epId)} />
+
+        {/* 短剧专属沉浸播放视窗 */}
+        {activePlayback && (
+          <PlayerModal
+            drama={activePlayback.drama}
+            episodes={episodes}
+            initialEpisodeId={activePlayback.episodeId}
+            initialPosition={activePlayback.initialPosition}
+            onClose={handleClosePlayer}
+            onSwitchEpisode={(epId) => {
+              setActivePlayback((prev) => (prev ? { ...prev, episodeId: epId, initialPosition: 0 } : null));
+            }}
+          />
+        )}
       </div>
 
       {/* 底部导航栏 */}

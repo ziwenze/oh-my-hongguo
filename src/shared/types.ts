@@ -80,6 +80,19 @@ export interface PlaybackMediaSource {
   audioUrl?: string;
 }
 
+// 活跃播放会话模型
+export interface PlaybackSessionState {
+  seriesId: string;
+  seriesTitle: string;
+  episodeId: string;
+  episodeNumber: number;
+  episodeTitle: string;
+  positionSeconds: number;
+  durationSeconds: number;
+  isPlaying: boolean;
+  expiresAt?: number;
+}
+
 // 搜索联想条目
 export interface SearchSuggestionItem {
   text: string;
@@ -121,6 +134,10 @@ export interface IElectronAPI {
 
   // 播放协调 (阶段 0 决策后接入)
   resolvePlaybackSource(episodeId: string): Promise<PlaybackMediaSource>;
+  startSession(session: Omit<PlaybackSessionState, 'isPlaying'>): Promise<void>;
+  updateSessionProgress(progress: { positionSeconds: number; durationSeconds?: number }): Promise<void>;
+  getCurrentSession(): Promise<PlaybackSessionState | null>;
+  closeSession(): Promise<void>;
 
   // 本地持久化 (历史记录与收藏)
   getHistory(): Promise<WatchHistoryItem[]>;
