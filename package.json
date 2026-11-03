@@ -6,8 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
+    "test": "node --experimental-strip-types --test 'tests/**/*.test.mjs'",
     "test:poc": "node scripts/poc_inspect.mjs"
   },
   "dependencies": {

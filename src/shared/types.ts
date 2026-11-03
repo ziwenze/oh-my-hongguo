@@ -80,6 +80,24 @@ export interface PlaybackMediaSource {
   audioUrl?: string;
 }
 
+// 搜索联想条目
+export interface SearchSuggestionItem {
+  text: string;
+  keyword?: string;
+}
+
+// 榜单短剧条目
+export interface RankDramaItem {
+  rank: number;
+  seriesId: string;
+  title: string;
+  coverUrl: string;
+  score?: string;
+  actor?: string;
+  episodeCount?: number;
+  description?: string;
+}
+
 // 客户端系统与诊断信息
 export interface SystemDiagnostics {
   appVersion: string;
@@ -95,10 +113,11 @@ export interface IElectronAPI {
   // 元数据浏览
   getDiscover(options?: { channel?: string; cursor?: string }): Promise<PageResult<DramaSummary>>;
   searchDramas(query: string, options?: { cursor?: string }): Promise<PageResult<DramaSummary>>;
-  getSearchSuggestions(prefix: string): Promise<string[]>;
+  getSearchSuggestions(prefix: string): Promise<SearchSuggestionItem[]>;
   getHotSearch(): Promise<{ hotQueries: string[]; searchCues: string[] }>;
   getDramaDetail(seriesId: string): Promise<DramaSummary | null>;
   getEpisodes(seriesId: string, options?: { cursor?: string; pageSize?: number }): Promise<PageResult<EpisodeItem>>;
+  getShortRank(options?: { content?: string; board?: string; cursor?: string }): Promise<PageResult<RankDramaItem>>;
 
   // 播放协调 (阶段 0 决策后接入)
   resolvePlaybackSource(episodeId: string): Promise<PlaybackMediaSource>;

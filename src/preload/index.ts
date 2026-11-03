@@ -10,6 +10,7 @@ const api: IElectronAPI = {
   getHotSearch: () => ipcRenderer.invoke('sdk:getHotSearch'),
   getDramaDetail: (seriesId) => ipcRenderer.invoke('sdk:getDramaDetail', seriesId),
   getEpisodes: (seriesId, options) => ipcRenderer.invoke('sdk:getEpisodes', seriesId, options),
+  getShortRank: (options) => ipcRenderer.invoke('sdk:getShortRank', options),
 
   resolvePlaybackSource: (episodeId) => ipcRenderer.invoke('sdk:resolvePlaybackSource', episodeId),
 

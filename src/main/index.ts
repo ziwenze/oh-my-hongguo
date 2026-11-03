@@ -1,14 +1,38 @@
 import electron from 'electron';
+import type { BrowserWindow as BrowserWindowType, HandlerDetails } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sdkAdapter } from './sdk/adapter.js';
 import { dataStore } from './store/dataStore.js';
-import type { SystemDiagnostics } from '../shared/types.js';
+import type { FavoriteItem, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
 
 const { app, BrowserWindow, ipcMain, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: BrowserWindowType | null = null;
+
+// 验证请求来源的合法性
+function isAuthorizedSender(senderFrame: Electron.WebFrameMain | null): boolean {
+  if (!senderFrame) return false;
+  const frameUrl = senderFrame.url;
+  // 开发模式：只允许 Vite 本地服务器 Origin
+  if (process.env.VITE_DEV_SERVER_URL) {
+    try {
+      const devOrigin = new URL(process.env.VITE_DEV_SERVER_URL).origin;
+      return new URL(frameUrl).origin === devOrigin;
+    } catch {
+      return false;
+    }
+  }
+  // 生产模式：只允许 file: 协议
+  return frameUrl.startsWith('file://');
+}
+
+function assertSender(event: Electron.IpcMainInvokeEvent): void {
+  if (!isAuthorizedSender(event.senderFrame)) {
+    throw new Error('[Security] Unauthorized IPC invocation from untrusted frame');
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -18,7 +42,7 @@ function createWindow() {
     minHeight: 600,
     title: 'Oh-My-Hongguo · 红果短剧',
     backgroundColor: '#0d0f12',
-    titleBarStyle: 'hiddenInset', // macOS 原生磨砂胶囊风格
+    titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -28,22 +52,47 @@ function createWindow() {
     },
   });
 
-  // 外部链接一律用默认浏览器打开
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https:') || url.startsWith('http:')) {
-      shell.openExternal(url);
+  // 严格拦截新窗口弹窗
+  mainWindow.webContents.setWindowOpenHandler((details: HandlerDetails) => {
+    const targetUrl = details.url;
+    try {
+      const parsed = new URL(targetUrl);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        shell.openExternal(targetUrl).catch(() => {});
+      }
+    } catch {
+      // 忽略非法 URL
     }
     return { action: 'deny' };
   });
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('http://localhost') && !url.startsWith('file:')) {
+  // 严格拦截窗口内导航
+  mainWindow.webContents.on('will-navigate', (event: Electron.Event, navigationUrl: string) => {
+    let isAllowed = false;
+    try {
+      if (process.env.VITE_DEV_SERVER_URL) {
+        const allowedOrigin = new URL(process.env.VITE_DEV_SERVER_URL).origin;
+        isAllowed = new URL(navigationUrl).origin === allowedOrigin;
+      } else {
+        isAllowed = navigationUrl.startsWith('file://');
+      }
+    } catch {
+      isAllowed = false;
+    }
+
+    if (!isAllowed) {
       event.preventDefault();
-      shell.openExternal(url);
+      try {
+        const parsed = new URL(navigationUrl);
+        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+          shell.openExternal(navigationUrl).catch(() => {});
+        }
+      } catch {
+        // 忽略
+      }
     }
   });
 
-  // 开发模式加载 Vite 本地服务，生产模式加载静态 dist
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
@@ -55,67 +104,133 @@ function createWindow() {
   });
 }
 
-// 注册 IPC 调度
 function registerIpcHandlers() {
-  // SDK 元数据
-  ipcMain.handle('sdk:getDiscover', async (_, options) => {
-    return await sdkAdapter.getDiscover(options);
+  // 1. 发现推荐
+  ipcMain.handle('sdk:getDiscover', async (event, options?: unknown) => {
+    assertSender(event);
+    const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
+    const channel = typeof opts.channel === 'string' ? opts.channel : undefined;
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
+    return await sdkAdapter.getDiscover({ channel, cursor });
   });
 
-  ipcMain.handle('sdk:searchDramas', async (_, query, options) => {
-    return await sdkAdapter.search(query, options);
+  // 2. 搜索短剧
+  ipcMain.handle('sdk:searchDramas', async (event, query: unknown, options?: unknown) => {
+    assertSender(event);
+    if (typeof query !== 'string') {
+      throw new TypeError('[IPC] query must be a string');
+    }
+    const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
+    return await sdkAdapter.search(query, { cursor });
   });
 
-  ipcMain.handle('sdk:getSearchSuggestions', async (_, prefix) => {
+  // 3. 搜索联想
+  ipcMain.handle('sdk:getSearchSuggestions', async (event, prefix: unknown) => {
+    assertSender(event);
+    if (typeof prefix !== 'string') return [];
     return await sdkAdapter.suggest(prefix);
   });
 
-  ipcMain.handle('sdk:getHotSearch', async () => {
+  // 4. 热搜
+  ipcMain.handle('sdk:getHotSearch', async (event) => {
+    assertSender(event);
     return await sdkAdapter.getHotSearch();
   });
 
-  ipcMain.handle('sdk:getDramaDetail', async (_, seriesId) => {
-    return await sdkAdapter.getSeriesDetail(seriesId);
+  // 5. 剧集详情
+  ipcMain.handle('sdk:getDramaDetail', async (event, seriesId: unknown) => {
+    assertSender(event);
+    if (typeof seriesId !== 'string' || !seriesId.trim()) {
+      throw new TypeError('[IPC] seriesId must be a non-empty string');
+    }
+    return await sdkAdapter.getSeriesDetail(seriesId.trim());
   });
 
-  ipcMain.handle('sdk:getEpisodes', async (_, seriesId, options) => {
-    return await sdkAdapter.listEpisodes(seriesId, options);
+  // 6. 分集查询
+  ipcMain.handle('sdk:getEpisodes', async (event, seriesId: unknown, options?: unknown) => {
+    assertSender(event);
+    if (typeof seriesId !== 'string' || !seriesId.trim()) {
+      throw new TypeError('[IPC] seriesId must be a non-empty string');
+    }
+    const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
+    const pageSize = typeof opts.pageSize === 'number' && opts.pageSize > 0 ? opts.pageSize : undefined;
+    return await sdkAdapter.listEpisodes(seriesId.trim(), { cursor, pageSize });
   });
 
-  ipcMain.handle('sdk:resolvePlaybackSource', async (_, episodeId) => {
-    return await sdkAdapter.resolvePlayback(episodeId);
+  // 6.5 短剧排行榜
+  ipcMain.handle('sdk:getShortRank', async (event, options?: unknown) => {
+    assertSender(event);
+    const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
+    const content = typeof opts.content === 'string' ? opts.content : undefined;
+    const board = typeof opts.board === 'string' ? opts.board : undefined;
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
+    return await sdkAdapter.getShortRank({ content, board, cursor });
   });
 
-  // 本地数据存储
-  ipcMain.handle('store:getHistory', async () => {
+  // 7. 播放源解析
+  ipcMain.handle('sdk:resolvePlaybackSource', async (event, episodeId: unknown) => {
+    assertSender(event);
+    if (typeof episodeId !== 'string' || !episodeId.trim()) {
+      throw new TypeError('[IPC] episodeId must be a non-empty string');
+    }
+    return await sdkAdapter.resolvePlayback(episodeId.trim());
+  });
+
+  // 8. 历史记录
+  ipcMain.handle('store:getHistory', async (event) => {
+    assertSender(event);
     return await dataStore.getHistory();
   });
 
-  ipcMain.handle('store:saveHistory', async (_, item) => {
-    return await dataStore.saveHistory(item);
+  ipcMain.handle('store:saveHistory', async (event, item: unknown) => {
+    assertSender(event);
+    if (!item || typeof item !== 'object') {
+      throw new TypeError('[IPC] item must be an object');
+    }
+    const record = item as Partial<WatchHistoryItem>;
+    if (!record.seriesId || !record.episodeId) {
+      throw new TypeError('[IPC] History item missing seriesId or episodeId');
+    }
+    return await dataStore.saveHistory(record as WatchHistoryItem);
   });
 
-  ipcMain.handle('store:clearHistory', async () => {
+  ipcMain.handle('store:clearHistory', async (event) => {
+    assertSender(event);
     return await dataStore.clearHistory();
   });
 
-  ipcMain.handle('store:getFavorites', async () => {
+  // 9. 追剧收藏
+  ipcMain.handle('store:getFavorites', async (event) => {
+    assertSender(event);
     return await dataStore.getFavorites();
   });
 
-  ipcMain.handle('store:toggleFavorite', async (_, item) => {
-    return await dataStore.toggleFavorite(item);
+  ipcMain.handle('store:toggleFavorite', async (event, item: unknown) => {
+    assertSender(event);
+    if (!item || typeof item !== 'object') {
+      throw new TypeError('[IPC] item must be an object');
+    }
+    const fav = item as Partial<FavoriteItem>;
+    if (!fav.seriesId) {
+      throw new TypeError('[IPC] Favorite item missing seriesId');
+    }
+    return await dataStore.toggleFavorite(fav as FavoriteItem);
   });
 
-  // 窗口与诊断
-  ipcMain.handle('window:toggleAlwaysOnTop', async () => {
+  // 10. 窗口控制
+  ipcMain.handle('window:toggleAlwaysOnTop', async (event) => {
+    assertSender(event);
     if (!mainWindow) return false;
     const current = mainWindow.isAlwaysOnTop();
     mainWindow.setAlwaysOnTop(!current);
     return !current;
   });
 
-  ipcMain.handle('system:getDiagnostics', async (): Promise<SystemDiagnostics> => {
+  // 11. 诊断
+  ipcMain.handle('system:getDiagnostics', async (event): Promise<SystemDiagnostics> => {
+    assertSender(event);
     return {
       appVersion: app.getVersion(),
       electronVersion: process.versions.electron,
