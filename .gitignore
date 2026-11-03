@@ -8,8 +8,9 @@
 /release/
 /out/
 
-# Internal planning & PRD documents
-/docs/
+# Local draft notes
+docs/*.draft.md
+docs/*.local.md
 *.tmp
 *.log
 
