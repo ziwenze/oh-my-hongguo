@@ -109,6 +109,7 @@ export class WindowManager {
     });
 
     this.setupWindowSecurity(pip);
+    this.pipWindow = pip;
 
     // 握手屏障：单窗口发声保护，先通知主窗口暂停发声
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
@@ -145,6 +146,7 @@ export class WindowManager {
       // 阶段 3 (Rollback): 握手或加载失败，立即销毁小窗并通知主窗口恢复会话
       console.warn('[WindowManager] PiP handoff failed, rolling back to main window:', err);
       if (!pip.isDestroyed()) pip.destroy();
+      this.pipWindow = null;
       this.pipReadyResolver = null;
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         this.mainWindow.webContents.send('playback:handoff-from-pip', {
