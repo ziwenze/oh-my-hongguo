@@ -167,6 +167,12 @@ export interface IElectronAPI {
   openPiPWindow(): Promise<boolean>;
   closePiPWindow(): Promise<boolean>;
   isPiPActive(): Promise<boolean>;
+  onHandoffToPiP(
+    callback: (data: { newToken: PlaybackSessionToken; session: PlaybackSessionState }) => void
+  ): () => void;
+  onHandoffFromPiP(
+    callback: (data: { newToken: PlaybackSessionToken; session: PlaybackSessionState }) => void
+  ): () => void;
 
   // 本地持久化 (历史记录与收藏)
   getHistory(): Promise<WatchHistoryItem[]>;

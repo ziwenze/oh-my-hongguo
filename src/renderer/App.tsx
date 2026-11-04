@@ -43,7 +43,29 @@ export default function App() {
         setSearchCue(searchCues[0]);
       }
     }).catch(() => {});
-  }, [loadLibrary]);
+
+    // 监听从小窗 (PiP) 迁回主窗口的接力事件，恢复断点播放
+    const unsubFromPiP = window.electronAPI.onHandoffFromPiP(async ({ session }) => {
+      if (!session) return;
+      try {
+        const detail = await window.electronAPI.getDramaDetail(session.seriesId);
+        if (detail) {
+          await openDramaDetail(detail);
+          setActivePlayback({
+            drama: detail,
+            episodeId: session.episodeId,
+            initialPosition: session.positionSeconds,
+          });
+        }
+      } catch (err) {
+        console.warn('[App] Failed to resume session from PiP:', err);
+      }
+    });
+
+    return () => {
+      unsubFromPiP();
+    };
+  }, [loadLibrary, openDramaDetail]);
 
   // 全局键盘快捷键
   useEffect(() => {

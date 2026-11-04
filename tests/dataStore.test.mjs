@@ -186,6 +186,42 @@ test('DataStore offline unit test suite', async (t) => {
     );
   });
 
+  await t.test('7. Closed store rejects subsequent async and sync phantom writes', async () => {
+    const dsClosed = new DataStore(testBaseDir);
+    await dsClosed.load();
+    await dsClosed.closeAsync();
+
+    await dsClosed.saveHistory({
+      seriesId: 'phantom_write',
+      seriesTitle: '幽灵写入剧',
+      episodeId: 'ep_phantom',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
+      positionSeconds: 10,
+      durationSeconds: 100,
+      progressPercentage: 10,
+      updatedAt: Date.now(),
+    });
+
+    dsClosed.saveHistorySync({
+      seriesId: 'phantom_write_sync',
+      seriesTitle: '幽灵同步写入剧',
+      episodeId: 'ep_phantom_2',
+      episodeNumber: 2,
+      episodeTitle: '第2集',
+      positionSeconds: 20,
+      durationSeconds: 100,
+      progressPercentage: 20,
+      updatedAt: Date.now(),
+    });
+
+    const dsReload = new DataStore(testBaseDir);
+    await dsReload.load();
+    const history = await dsReload.getHistory();
+    assert.equal(history.find((h) => h.seriesId === 'phantom_write'), undefined);
+    assert.equal(history.find((h) => h.seriesId === 'phantom_write_sync'), undefined);
+  });
+
   // 测试完毕清理
   await fs.rm(testBaseDir, { recursive: true, force: true });
 });

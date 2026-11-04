@@ -251,6 +251,10 @@ export class DataStore {
   }
 
   public saveHistorySync(item: WatchHistoryItem): void {
+    if (this.isClosed) {
+      console.warn('[DataStore] Blocked saveHistorySync on closed store');
+      return;
+    }
     this.currentMemoryVersion++;
     const idx = this.cache.history.findIndex((h) => h.seriesId === item.seriesId);
     if (idx >= 0) {

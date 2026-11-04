@@ -26,6 +26,20 @@ const api: IElectronAPI = {
   openPiPWindow: () => ipcRenderer.invoke('window:openPiP'),
   closePiPWindow: () => ipcRenderer.invoke('window:closePiP'),
   isPiPActive: () => ipcRenderer.invoke('window:isPiPActive'),
+  onHandoffToPiP: (callback) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('playback:handoff-to-pip', handler);
+    return () => {
+      ipcRenderer.removeListener('playback:handoff-to-pip', handler);
+    };
+  },
+  onHandoffFromPiP: (callback) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('playback:handoff-from-pip', handler);
+    return () => {
+      ipcRenderer.removeListener('playback:handoff-from-pip', handler);
+    };
+  },
 
   getHistory: () => ipcRenderer.invoke('store:getHistory'),
   saveHistory: (item) => ipcRenderer.invoke('store:saveHistory', item),

@@ -74,7 +74,7 @@ export class WindowManager {
     return win;
   }
 
-  // 2. 独立置顶摸鱼小窗 (PiP) 创建与会话接力
+  // 2. 独立置顶摸鱼小窗 (PiP) 创建与安全握手接力 (Prepare -> Commit -> Ack / Rollback)
   public async openPiPWindow(): Promise<boolean> {
     const currentSession = playbackCoordinator.getCurrentSession();
     if (!currentSession) {
@@ -87,6 +87,7 @@ export class WindowManager {
       return true;
     }
 
+    // 阶段 1: Prepare - 创建独立小窗，保持原主窗口所有权，预加载页面
     const pip = new BrowserWindow({
       width: 300,
       height: 533, // 9:16 画幅
@@ -108,14 +109,32 @@ export class WindowManager {
 
     this.setupWindowSecurity(pip);
 
-    // 将播放会话所有权原子移交至小窗 WebContents ID
+    const query = `?mode=pip&sessionId=${encodeURIComponent(currentSession.token.sessionId)}`;
+    const loadPromise = process.env.VITE_DEV_SERVER_URL
+      ? pip.loadURL(`${process.env.VITE_DEV_SERVER_URL}${query}`)
+      : pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: query });
+
+    try {
+      await loadPromise;
+    } catch (err) {
+      // 阶段 3 (Rollback): 页面加载异常，立即销毁并回滚，不破坏主会话
+      console.warn('[WindowManager] PiP window failed to load, rolling back handoff:', err);
+      pip.destroy();
+      return false;
+    }
+
+    if (pip.isDestroyed()) {
+      return false;
+    }
+
+    // 阶段 2 (Commit): 页面就绪后原子移交会话所有权至小窗 WebContents ID
     const newToken = playbackCoordinator.transferOwnership(pip.webContents.id);
     if (!newToken) {
       pip.destroy();
       return false;
     }
 
-    // 主窗口切换为“小窗接力中”状态并静音/停止发声
+    // 主窗口切换为“小窗接力中”状态并停止主播放器发声
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('playback:handoff-to-pip', {
         newToken,
@@ -123,17 +142,9 @@ export class WindowManager {
       });
     }
 
-    // 小窗加载页面
-    const query = `?mode=pip&sessionId=${encodeURIComponent(newToken.sessionId)}`;
-    if (process.env.VITE_DEV_SERVER_URL) {
-      pip.loadURL(`${process.env.VITE_DEV_SERVER_URL}${query}`);
-    } else {
-      pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: query });
-    }
-
     pip.on('closed', () => {
       this.pipWindow = null;
-      // 小窗关闭时，若主窗口存活，将所有权迁回主窗口
+      // 小窗关闭时，若主窗口存活，对称移交所有权回主窗口并通知恢复
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
         if (returnToken) {
@@ -157,6 +168,18 @@ export class WindowManager {
     this.pipWindow.close();
     this.pipWindow = null;
     return true;
+  }
+
+  // 4. 窗口新会话所有权收回：若非小窗启动新会话，主动销毁小窗确保单一窗口发声
+  public onSessionStartedByWindow(callerWindowId: number): void {
+    if (
+      this.pipWindow &&
+      !this.pipWindow.isDestroyed() &&
+      this.pipWindow.webContents.id !== callerWindowId
+    ) {
+      this.pipWindow.close();
+      this.pipWindow = null;
+    }
   }
 
   // 安全配置

@@ -120,7 +120,14 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
     playerRef.current = adapter;
 
+    // 监听主进程发来的小窗接力事件：暂停发声并关闭主窗口浮层
+    const unsubHandoffTo = window.electronAPI.onHandoffToPiP(() => {
+      adapter.pause();
+      onClose();
+    });
+
     return () => {
+      unsubHandoffTo();
       adapter.destroy();
       playerRef.current = null;
       if (sessionTokenRef.current) {
@@ -128,7 +135,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         sessionTokenRef.current = null;
       }
     };
-  }, []);
+  }, [onClose]);
 
   // 2. 统一切集控制器 (带 Token 所有权、generation 防竞态、同集去重与严格状态机)
   const switchEpisode = useCallback(
@@ -526,8 +533,13 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
               <button
                 onClick={async () => {
                   playerRef.current?.pause();
-                  await window.electronAPI.openPiPWindow();
-                  onClose();
+                  const success = await window.electronAPI.openPiPWindow();
+                  if (success) {
+                    onClose();
+                  } else {
+                    playerRef.current?.play().catch(() => {});
+                    alert('独立置顶小窗开启失败或当前无活跃播放会话');
+                  }
                 }}
                 title="开启独立置顶摸鱼小窗 (PiP)"
                 className="p-1 text-gray-300 hover:text-primary transition-colors"

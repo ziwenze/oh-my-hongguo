@@ -160,6 +160,7 @@ function registerIpcHandlers() {
         : 0;
 
     const ownerWindowId = event.sender.id;
+    windowManager.onSessionStartedByWindow(ownerWindowId);
     return await playbackCoordinator.startSession(
       {
         seriesId: s.seriesId.trim().slice(0, 50),
@@ -211,7 +212,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle('playback:closeSession', async (event, token?: unknown) => {
     assertSender(event);
-    return await playbackCoordinator.closeSession(token as PlaybackSessionToken | undefined, event.sender.id);
+    if (!token || typeof token !== 'object') {
+      return false; // 渲染层关闭必须携带合法 Token 凭证
+    }
+    return await playbackCoordinator.closeSession(token as PlaybackSessionToken, event.sender.id);
   });
 
   // 8. 历史记录 (严格字段校验)
@@ -409,12 +413,25 @@ app.whenReady().then(async () => {
           const source = await window.electronAPI.resolvePlaybackSource('ep_1');
           if (!source || !source.streams || source.streams.length === 0) throw new Error('resolvePlaybackSource failed');
 
+          // 验证独立置顶摸鱼小窗 (PiP) 双窗口创建与会话所有权移交
+          const pipOpened = await window.electronAPI.openPiPWindow();
+          if (!pipOpened) throw new Error('openPiPWindow failed');
+          const isPiPActive1 = await window.electronAPI.isPiPActive();
+          if (!isPiPActive1) throw new Error('isPiPActive must be true after opening PiP');
+
+          // 验证独立小窗安全关闭与会话回退移交
+          const pipClosed = await window.electronAPI.closePiPWindow();
+          if (!pipClosed) throw new Error('closePiPWindow failed');
+          const isPiPActive2 = await window.electronAPI.isPiPActive();
+          if (isPiPActive2) throw new Error('isPiPActive must be false after closing PiP');
+
           return {
             diagPlatform: diag.platform,
             discoverCount: discover.items.length,
             episodesCount: episodes.items.length,
             historyCount: history.length,
             playbackStreams: source.streams.length,
+            pipVerified: true,
           };
         })()`;
 
