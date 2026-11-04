@@ -77,9 +77,9 @@ jobs:
         run: |
           ls -la release/
           test -n "$(ls release/*Setup*.exe 2>/dev/null)" || { echo "Missing NSIS Setup.exe!"; exit 1; }
-          test -n "$(ls release/*[Pp]ortable*.exe 2>/dev/null)" || { echo "Missing Portable.exe!"; exit 1; }
+          test -n "$(ls release/*Portable*.exe 2>/dev/null)" || { echo "Missing Portable.exe!"; exit 1; }
           cd release
-          sha256sum *Setup*.exe *[Pp]ortable*.exe > SHA256SUMS.txt || true
+          sha256sum *Setup*.exe *Portable*.exe > SHA256SUMS.txt
           cat SHA256SUMS.txt
           echo "Windows installers verified and checksummed successfully."
 
