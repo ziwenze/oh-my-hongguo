@@ -61,6 +61,7 @@ async function run() {
     'ackSourcePaused',
     'ackPiPReady',
     'ackTargetPlaying',
+    'ackAwaitingUserGesture',
     'reportPiPPlaybackError',
     'onHandoffToPiP',
     'onHandoffFromPiP',
@@ -80,9 +81,9 @@ async function run() {
   const testUserData = path.join(os.tmpdir(), `ohg_smoke_${Date.now()}`);
   await fs.mkdir(testUserData, { recursive: true });
 
-  const childArgs = ['.', '--disable-gpu', `--user-data-dir=${testUserData}`];
+  const childArgs = ['.', '--disable-gpu', `--user-data-dir=${testUserData}`, '--no-sandbox'];
   if (process.platform === 'linux') {
-    childArgs.push('--no-sandbox', '--disable-dev-shm-usage');
+    childArgs.push('--disable-dev-shm-usage');
   }
 
   const childEnv = { ...process.env };

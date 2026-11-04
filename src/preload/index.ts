@@ -29,6 +29,7 @@ const api: IElectronAPI = {
   ackSourcePaused: (positionSeconds) => ipcRenderer.invoke('window:ackSourcePaused', positionSeconds),
   ackPiPReady: () => ipcRenderer.invoke('window:ackPiPReady'),
   ackTargetPlaying: (token) => ipcRenderer.invoke('window:ackTargetPlaying', token),
+  ackAwaitingUserGesture: (token) => ipcRenderer.invoke('window:ackAwaitingUserGesture', token),
   reportPiPPlaybackError: (token, error) => ipcRenderer.invoke('window:reportPiPPlaybackError', token, error),
   onHandoffToPiP: (callback) => {
     const handler = (_: any, data: any) => callback(data);

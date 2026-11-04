@@ -6,6 +6,7 @@ export interface PlayerEvents {
   onError?: (err: Error) => void;
   onPlayStateChange?: (isPlaying: boolean) => void;
   onFirstFrameRendered?: () => void;
+  onAwaitingUserGesture?: () => void;
 }
 
 export class WebPlayerAdapter {
@@ -136,6 +137,7 @@ export class WebPlayerAdapter {
 
       // 若为浏览器自动播放受限 (NotAllowedError)，等待用户交互触发，不视作解码故障
       if (e.name === 'NotAllowedError') {
+        this.events.onAwaitingUserGesture?.();
         return;
       }
 

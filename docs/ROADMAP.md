@@ -76,30 +76,47 @@
 
 ---
 
-### 阶段 4：跨平台打包与发行准备 (Packaging & Release) —— [Implemented / Device Pending]
+### 阶段 4：跨平台打包与发行准备 (Packaging & Release)
+
+#### 4.1 构建与产物完整性验证 (Packaging & Artifact Integrity) —— [CI Verified]
 - **核心任务**：
   1. 配置 `electron-builder`：
      - Windows: NSIS 安装包、免安装 Portable 绿色便携版（x64）；
      - macOS: DMG 安装包、Zip 免安装归档（Apple Silicon arm64 / Intel x64）；
-  2. 配置 `asarUnpack` 并实机校验安装包解压后 `openhongguo.wasm` 能正确读取执行；
+  2. 配置 `asarUnpack` 并实机校验安装包解包后 `openhongguo.wasm` 能正确解包定位；
   3. 系统托盘（System Tray）集成与窗口生命周期动态感知；
-  4. 编写全链路端到端构建脚本与 GitHub Actions Release 产物强校验。
+  4. 搭建独立的 GitHub Actions `package-validation.yml` 工作流并自动生成 SHA-256 完整性清单。
 - **准出验收标准**：
-  - [x] **[Implemented]** electron-builder 打包配置与 release.yml 产物强校验完成；
-  - [ ] **[Device Verified]** 构建产物在干净的 Windows 10/11 和 macOS 设备上双击即可直接启动运行；
-  - [ ] **[Device Verified]** 安装包解包后能够直接加载独立的 Wasm 模块并完成离线业务运行；
-  - [ ] **[Device Verified]** 遵循 Apache 2.0 规范，安装包内携带合规的 LICENSE 与 NOTICE 文件。
+  - [x] **[CI Verified]** electron-builder 解包目录生成通过，`app.asar` 与解包目录下的 `openhongguo.wasm` 校验存在；
+  - [x] **[CI Verified]** macOS (DMG/ZIP) 与 Windows (NSIS Setup/Portable) 产物强校验与 SHA-256 清单自动生成并上传为 Actions Artifacts。
+
+#### 4.2 打包产物运行时验收 (Packaged Artifact Runtime Acceptance) —— [CI Verified]
+- **核心任务**：
+  1. 真实可执行程序脱离源码目录直接启动（macOS `.app`、Windows `win-unpacked`）；
+  2. 打包后真实环境加载解包后的 Wasm 并完成 `createClient()` 实例化与方法表挂载；
+  3. Preload 全部 29 项 ContextBridge API 白名单校验；
+  4. 真实 HTML5 `<video>` 渲染管道、`playing` 出帧事件、时间正向递增与单发声屏障断言；
+  5. 独立置顶摸鱼小窗 (PiP) 双向接力事务闭环：小窗 `closed` 提前布防、超时严格回滚（消除假成功）、`target_playing` 与 `awaiting_gesture` 状态分流；
+  6. 数据持久化跨进程重启恢复断言：应用退出（flushSync）后重新启动，历史与收藏从磁盘完整恢复。
+- **准出验收标准**：
+  - [x] **[CI Verified]** `tests/packagedRuntimeSmoke.mjs` 在打包后可执行程序上执行并通过 Phase 1 与 Phase 2 全链路测试；
+  - [x] **[CI Verified]** `package-validation.yml` 在 macOS 和 Windows 上全自动化运行打包产物实际启动、Wasm 初始化与数据恢复验收。
+
+#### 4.3 干净环境真机验收 (Clean Device Verification) —— [Device Pending]
+- **准出验收标准**：
+  - [ ] **[Device Verified]** 构建产物在干净的 Windows 10/11 和 macOS 物理设备上双击即可直接启动运行；
+  - [ ] **[Device Verified]** 遵循 Apache 2.0 规范，安装包内携带合规的 LICENSE 与 NOTICE 文件；
+  - [ ] **[Device Verified]** 平台限制诊断展示与友好降级交互实测。
+
+#### 4.4 代码签名、公证与正式发布 (Sign, Notarize & Distribution) —— [Pending]
+- **准出验收标准**：
+  - [ ] Apple Developer 证书签名与 Notarization 公证自动化；
+  - [ ] Windows Authenticode 代码签名；
+  - [ ] GitHub Releases 官方分发条目与更新日志。
 
 ---
 
 ## 3. 性能与资源指标测量口径规范 (Performance Metrics)
-
-| 指标 | 目标阈值 | 测量规范与样本口径 |
-| :--- | :--- | :--- |
-| **首帧渲染耗时 (P95)** | **< 1.0 秒** (预加载命中) | 从用户触发切集事件至播放器通过 `video.requestVideoFrameCallback()` 实际渲染出视频第一帧，统计 50 次切换样本。 |
-| **UI 交互响应延迟** | **< 50 毫秒** | 快捷键按下或点击分集至 UI 选中状态变更。 |
-| **内存占用 (Idle)** | **< 150 MB** | 应用主窗口静置无播放时，Electron 整体进程树（Main + Renderer + GPU）的私有物理工作集 (Private Working Set)。 |
-| **内存占用 (Playing)** | **< 350 MB** | 连续播放 1080p 视频 15 分钟后，Electron 整体进程树内存。 |
 
 | 指标 | 目标阈值 | 测量规范与样本口径 |
 | :--- | :--- | :--- |

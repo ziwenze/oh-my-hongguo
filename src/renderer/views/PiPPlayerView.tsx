@@ -44,6 +44,11 @@ export const PiPPlayerView: React.FC = () => {
           }
         }
       },
+      onAwaitingUserGesture: () => {
+        if (sessionTokenRef.current) {
+          window.electronAPI.ackAwaitingUserGesture(sessionTokenRef.current).catch(() => {});
+        }
+      },
       onError: (err) => {
         setErrorMsg(err.message || '播放失败');
         if (sessionTokenRef.current) {

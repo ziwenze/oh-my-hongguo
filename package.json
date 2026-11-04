@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test --test-concurrency=1 'tests/**/*.test.mjs'",
     "test:smoke": "node --experimental-strip-types tests/electronSmoke.mjs",
+    "test:packaged": "node --experimental-strip-types tests/packagedRuntimeSmoke.mjs",
     "test:poc": "node scripts/poc_inspect.mjs",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir"

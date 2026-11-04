@@ -4,7 +4,10 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'src/**'
+      - 'tests/**'
       - 'electron-builder.json'
+      - 'package.json'
       - '.github/workflows/package-validation.yml'
 
 jobs:
@@ -39,6 +42,12 @@ jobs:
           test -f release/mac-arm64/Oh-My-Hongguo.app/Contents/Resources/app.asar || { echo "Missing app.asar!"; exit 1; }
           test -f release/mac-arm64/Oh-My-Hongguo.app/Contents/Resources/app.asar.unpacked/vendor/openhongguo/dist/openhongguo.wasm || { echo "Missing unpacked openhongguo.wasm!"; exit 1; }
           echo "macOS unpacked directory & Wasm resource verified."
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Run Packaged Application Runtime Acceptance (macOS)
+        if: runner.os == 'macOS'
+        run: npm run test:packaged
 
       - name: Validate unpacked directory structure (Windows)
         if: runner.os == 'Windows'
@@ -49,6 +58,11 @@ jobs:
           test -f release/win-unpacked/resources/app.asar || { echo "Missing app.asar!"; exit 1; }
           test -f release/win-unpacked/resources/app.asar.unpacked/vendor/openhongguo/dist/openhongguo.wasm || { echo "Missing unpacked openhongguo.wasm!"; exit 1; }
           echo "Windows unpacked directory & Wasm resource verified."
+
+      - name: Run Packaged Application Runtime Acceptance (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: npm run test:packaged
 
       - name: Build full distribution installers (macOS)
         if: runner.os == 'macOS'

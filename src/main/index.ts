@@ -320,6 +320,12 @@ function registerIpcHandlers() {
     return windowManager.handleAckTargetPlaying(event.sender.id, token as PlaybackSessionToken);
   });
 
+  ipcMain.handle('window:ackAwaitingUserGesture', async (event, token: unknown) => {
+    assertSender(event);
+    if (!token || typeof token !== 'object') return false;
+    return windowManager.handleAckAwaitingUserGesture(event.sender.id, token as PlaybackSessionToken);
+  });
+
   ipcMain.handle('window:reportPiPPlaybackError', async (event, _token: unknown, error: unknown) => {
     assertSender(event);
     const errMsg = typeof error === 'string' ? error.slice(0, 500) : 'Unknown playback error';
@@ -370,9 +376,40 @@ app.whenReady().then(async () => {
     mainWindow.webContents.on('did-finish-load', async () => {
       clearTimeout(smokeTimeout);
       console.log('[Smoke] Window loaded index.html successfully!');
+
+      // 验证底层 Wasm SDK 在真实环境下的初始化能力 (加载解包后的 openhongguo.wasm)
       try {
+        const wasmOk = await sdkAdapter.verifyWasmRuntime();
+        if (!wasmOk) throw new Error('Wasm SDK failed to instantiate getSeries');
+        console.log('[Smoke] Verified real Openhongguo Wasm client instantiated successfully in runtime environment!');
+      } catch (wasmErr: any) {
+        console.error('[Smoke] Failed to verify Wasm runtime:', wasmErr);
+        mainWindow?.destroy();
+        app.quit();
+        process.exit(1);
+      }
+
+      try {
+        const isRestoreMode = process.env.OHG_VERIFY_RESTORE === '1';
         const testScript = `(async () => {
+          try {
           if (!window.electronAPI) throw new Error('window.electronAPI not exposed in renderer frame');
+
+          if (${isRestoreMode}) {
+            const restoredHistory = await window.electronAPI.getHistory();
+            if (restoredHistory.length === 0 || restoredHistory[0].seriesId !== 'mock_series_1') {
+              throw new Error('History did not persist across packaged app process restart');
+            }
+            const restoredFavorites = await window.electronAPI.getFavorites();
+            if (restoredFavorites.length === 0 || restoredFavorites[0].seriesId !== 'mock_series_1') {
+              throw new Error('Favorites did not persist across packaged app process restart');
+            }
+            return {
+              restoreVerified: true,
+              historyCount: restoredHistory.length,
+              favoritesCount: restoredFavorites.length,
+            };
+          }
 
           const diag = await window.electronAPI.getDiagnostics();
           if (!diag || !diag.electronVersion) throw new Error('getDiagnostics failed');
@@ -401,9 +438,9 @@ app.whenReady().then(async () => {
             episodeId: 'ep_1',
             episodeNumber: 1,
             episodeTitle: '第1集',
-            positionSeconds: 22.5,
-            durationSeconds: 120,
-            progressPercentage: 18,
+            positionSeconds: 1.5,
+            durationSeconds: 7.8,
+            progressPercentage: 19,
             updatedAt: Date.now(),
           });
           const history = await window.electronAPI.getHistory();
@@ -411,46 +448,126 @@ app.whenReady().then(async () => {
             throw new Error('History persistence over IPC failed');
           }
 
+          await window.electronAPI.toggleFavorite({
+            seriesId: 'mock_series_1',
+            title: '测试精选短剧1',
+            coverUrl: 'https://example.com/cover1.jpg',
+            addedAt: Date.now(),
+          });
+          const favorites = await window.electronAPI.getFavorites();
+          if (favorites.length === 0 || favorites[0].seriesId !== 'mock_series_1') {
+            throw new Error('Favorite persistence over IPC failed');
+          }
+
+          // 5. 真实本地 WebM 媒体解析、出帧开播、单窗口发声与 PiP 双向接力实测
+          const source = await window.electronAPI.resolvePlaybackSource('ep_1');
+          if (!source || !source.streams || source.streams.length === 0) throw new Error('resolvePlaybackSource failed');
+          const streamUrl = source.streams[0].url;
+
+          // 创建 DOM 视频元素并挂载，验证真实 HTML5 video 渲染管道
+          const video = document.createElement('video');
+          video.muted = true;
+          video.playsInline = true;
+          video.src = streamUrl;
+          video.currentTime = 1.0;
+          document.body.appendChild(video);
+
+          let playingFired = false;
+          video.addEventListener('playing', () => { playingFired = true; }, { once: true });
+
           const token = await window.electronAPI.startSession({
             seriesId: 'mock_series_1',
             seriesTitle: '测试精选短剧1',
             episodeId: 'ep_1',
             episodeNumber: 1,
             episodeTitle: '第1集',
-            positionSeconds: 22.5,
-            durationSeconds: 120,
+            positionSeconds: 1.0,
+            durationSeconds: 7.8,
           });
           if (!token || !token.sessionId) throw new Error('startSession must return a valid session token');
 
-          const readySuccess = await window.electronAPI.updateSessionStatus(token, 'ready');
-          if (!readySuccess) throw new Error('updateSessionStatus to ready failed');
+          await video.play();
+          // 等待视频实际出帧开播
+          for (let i = 0; i < 30; i++) {
+            if (playingFired && !video.paused && video.currentTime > 1.02) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          if (!playingFired) throw new Error('MainWindow video did not fire playing event');
+          if (video.paused) throw new Error('MainWindow video paused unexpectedly');
+          if (video.currentTime <= 1.0) throw new Error('MainWindow video currentTime did not advance');
 
-          const progSuccess = await window.electronAPI.updateSessionProgress(token, { positionSeconds: 30, durationSeconds: 120 });
-          if (!progSuccess) throw new Error('updateSessionProgress failed');
+          await window.electronAPI.updateSessionStatus(token, 'playing');
+          await window.electronAPI.updateSessionProgress(token, {
+            positionSeconds: video.currentTime,
+            durationSeconds: 7.8,
+          });
 
-          const curr = await window.electronAPI.getCurrentSession();
-          if (!curr || curr.status !== 'ready') throw new Error('Session state transition failed');
+          // 注册源窗口接力事件监听器 (单发声屏障：暂停源窗口并反馈进度)
+          let sourcePausedTriggered = false;
+          const unsubHandoffTo = window.electronAPI.onHandoffToPiP(async () => {
+            video.pause();
+            sourcePausedTriggered = true;
+            await window.electronAPI.ackSourcePaused(video.currentTime);
+          });
 
-          const source = await window.electronAPI.resolvePlaybackSource('ep_1');
-          if (!source || !source.streams || source.streams.length === 0) throw new Error('resolvePlaybackSource failed');
+          let restoredFromPiP = false;
+          let restoredPosition = 0;
+          const unsubHandoffFrom = window.electronAPI.onHandoffFromPiP(async ({ newToken, session }) => {
+            restoredFromPiP = true;
+            restoredPosition = session.positionSeconds;
+            video.currentTime = restoredPosition;
+            await video.play().catch(() => {});
+          });
 
-          // 验证独立置顶摸鱼小窗 (PiP) 双窗口创建与会话所有权移交 (必须在活跃会话存在时移交)
+          // 验证独立置顶摸鱼小窗 (PiP) 双窗口创建与会话所有权移交 (必须目标出帧开播确认后才返回 true)
           const pipOpened = await window.electronAPI.openPiPWindow();
-          if (!pipOpened) throw new Error('openPiPWindow failed');
+          if (!pipOpened) throw new Error('openPiPWindow failed to achieve target playing ack');
+          if (!sourcePausedTriggered) throw new Error('Source window onHandoffToPiP was not triggered');
+          if (!video.paused) throw new Error('Source window must be paused during PiP handoff to protect single-audio barrier');
+
           const isPiPActive1 = await window.electronAPI.isPiPActive();
           if (!isPiPActive1) throw new Error('isPiPActive must be true after opening PiP');
+
+          const currSession1 = await window.electronAPI.getCurrentSession();
+          if (!currSession1 || currSession1.token.ownerWindowId === token.ownerWindowId) {
+            throw new Error('PlaybackSessionToken ownership must be transferred to PiP window');
+          }
 
           // 验证独立小窗安全关闭与会话回退移交
           const pipClosed = await window.electronAPI.closePiPWindow();
           if (!pipClosed) throw new Error('closePiPWindow failed');
+
+          for (let i = 0; i < 30; i++) {
+            if (restoredFromPiP) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          if (!restoredFromPiP) throw new Error('MainWindow did not receive onHandoffFromPiP event on PiP close');
+
           const isPiPActive2 = await window.electronAPI.isPiPActive();
           if (isPiPActive2) throw new Error('isPiPActive must be false after closing PiP');
 
-          // 小窗关闭且所有权迁回后，安全结束本次测试会话
-          const tokenBack = await window.electronAPI.getCurrentSession();
-          if (tokenBack) {
-            await window.electronAPI.closeSession(tokenBack.token);
+          const currSession2 = await window.electronAPI.getCurrentSession();
+          if (!currSession2 || currSession2.token.ownerWindowId !== token.ownerWindowId) {
+            throw new Error('PlaybackSessionToken ownership must be transferred back to MainWindow');
           }
+          if (restoredPosition < 1.0) {
+            throw new Error('Playback position corrupted during PiP roundtrip');
+          }
+
+          // 清理监听器与 DOM 视频元素
+          unsubHandoffTo();
+          unsubHandoffFrom();
+          video.pause();
+          video.remove();
+          const closedOk = await window.electronAPI.closeSession(currSession2.token);
+          const sessionAfterClose = await window.electronAPI.getCurrentSession();
+          if (sessionAfterClose !== null) {
+            throw new Error('Session still exists after closeSession: closedOk=' + closedOk + ', sess=' + JSON.stringify(sessionAfterClose));
+          }
+
+          // 验证无活跃会话时打开小窗安全回滚返回 false
+          const badOpen = await window.electronAPI.openPiPWindow();
+          if (badOpen) throw new Error('openPiPWindow must return false when no active session exists');
 
           return {
             diagPlatform: diag.platform,
@@ -460,16 +577,22 @@ app.whenReady().then(async () => {
             playbackStreams: source.streams.length,
             pipVerified: true,
           };
+        } catch (e) {
+          return { error: e.message || String(e), stack: e.stack };
+        }
         })()`;
 
         const smokeResult = await mainWindow!.webContents.executeJavaScript(testScript);
+        if (smokeResult?.error) {
+          throw new Error(smokeResult.error + '\n' + smokeResult.stack);
+        }
         console.log('[Smoke] Successfully verified full business IPC & ContextBridge pipeline in real window:', smokeResult);
 
         mainWindow?.destroy();
         app.quit();
         process.exit(0);
-      } catch (err) {
-        console.error('[Smoke] Failure in renderer context:', err);
+      } catch (err: any) {
+        console.error('[Smoke] Failure in renderer context:', err?.message || err, err?.stack);
         mainWindow?.destroy();
         app.quit();
         process.exit(1);

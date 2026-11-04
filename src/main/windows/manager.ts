@@ -12,9 +12,9 @@ export class WindowManager {
   private mainWindow: BrowserWindowType | null = null;
   private pipWindow: BrowserWindowType | null = null;
   private prodDistUrl: string;
-  private pipReadyResolver: (() => void) | null = null;
+  private pipReadyResolver: ((ready: boolean) => void) | null = null;
   private sourcePausedResolver: ((pos: number) => void) | null = null;
-  private targetPlayingResolver: (() => void) | null = null;
+  private targetPlayingResolver: ((result: 'target_playing' | 'awaiting_gesture' | false) => void) | null = null;
   private openPiPPromise: Promise<boolean> | null = null;
 
   constructor(prodDistUrl: string) {
@@ -125,6 +125,37 @@ export class WindowManager {
 
     this.setupWindowSecurity(pip);
     this.pipWindow = pip;
+    const pipWindowId = pip.webContents.id;
+
+    // 关键架构守卫：小窗创建即刻注册 closed 监听，防止接力途中异常退出导致孤儿会话或事件丢失
+    pip.on('closed', () => {
+      this.pipWindow = null;
+      if (this.sourcePausedResolver) {
+        this.sourcePausedResolver(0);
+        this.sourcePausedResolver = null;
+      }
+      if (this.pipReadyResolver) {
+        this.pipReadyResolver(false);
+        this.pipReadyResolver = null;
+      }
+      if (this.targetPlayingResolver) {
+        this.targetPlayingResolver(false);
+        this.targetPlayingResolver = null;
+      }
+      // 小窗关闭时，若主窗口存活且会话归小窗所有，对称移交所有权回主窗口并通知恢复续播
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        const sess = playbackCoordinator.getCurrentSession();
+        if (sess && sess.token.ownerWindowId === pipWindowId) {
+          const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
+          if (returnToken) {
+            this.mainWindow.webContents.send('playback:handoff-from-pip', {
+              newToken: returnToken,
+              session: playbackCoordinator.getCurrentSession(),
+            });
+          }
+        }
+      }
+    });
 
     // 握手屏障 1: 单窗口发声保护，先通知主窗口暂停发声并等待确认
     const isSourcePlaying = currentSession.status === 'playing';
@@ -153,9 +184,9 @@ export class WindowManager {
     // 握手屏障 2: 建立 PiP 渲染帧 Ack 等待屏障 (超时 5 秒自动回滚)
     let readyTimer: NodeJS.Timeout | null = null;
     const readyPromise = new Promise<boolean>((resolve) => {
-      this.pipReadyResolver = () => {
+      this.pipReadyResolver = (ready) => {
         if (readyTimer) clearTimeout(readyTimer);
-        resolve(true);
+        resolve(ready);
       };
       readyTimer = setTimeout(() => {
         console.warn('[WindowManager] PiP ready handshake timed out, triggering rollback');
@@ -202,15 +233,16 @@ export class WindowManager {
       return false;
     }
 
-    // 建立目标小窗出帧开播 Ack 监听屏障
+    // 建立目标小窗出帧开播 Ack 监听屏障 (超时 3 秒严格回滚，无假成功)
     let targetPlayingTimer: NodeJS.Timeout | null = null;
-    const targetPlayingPromise = new Promise<boolean>((resolve) => {
-      this.targetPlayingResolver = () => {
+    const targetPlayingPromise = new Promise<'target_playing' | 'awaiting_gesture' | false>((resolve) => {
+      this.targetPlayingResolver = (res) => {
         if (targetPlayingTimer) clearTimeout(targetPlayingTimer);
-        resolve(true);
+        resolve(res);
       };
       targetPlayingTimer = setTimeout(() => {
-        resolve(true); // 离线测试或待用户交互时允许存续
+        console.warn('[WindowManager] PiP target playing timed out after 3000ms, triggering rollback');
+        resolve(false); // 严格回滚！超时坚决失败
       }, 3000);
     });
 
@@ -220,16 +252,16 @@ export class WindowManager {
       session: playbackCoordinator.getCurrentSession(),
     });
 
-    await targetPlayingPromise;
-    if (!this.pipWindow || this.pipWindow.isDestroyed()) {
-      return false;
-    }
+    const targetResult = await targetPlayingPromise;
+    this.targetPlayingResolver = null;
 
-    pip.on('closed', () => {
+    if (!targetResult || !this.pipWindow || this.pipWindow.isDestroyed()) {
+      // 目标开播超时或失败，执行事务失败回滚
+      console.warn('[WindowManager] PiP target playback failed or timed out, rolling back to main window');
+      if (this.pipWindow && !this.pipWindow.isDestroyed()) {
+        this.pipWindow.destroy();
+      }
       this.pipWindow = null;
-      this.pipReadyResolver = null;
-      this.sourcePausedResolver = null;
-      // 小窗关闭时，若主窗口存活，对称移交所有权回主窗口并通知恢复续播
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
         if (returnToken) {
@@ -239,7 +271,8 @@ export class WindowManager {
           });
         }
       }
-    });
+      return false;
+    }
 
     return true;
   }
@@ -265,7 +298,7 @@ export class WindowManager {
   public handleAckPiPReady(callerWindowId: number): boolean {
     if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
       if (this.pipReadyResolver) {
-        this.pipReadyResolver();
+        this.pipReadyResolver(true);
         this.pipReadyResolver = null;
         return true;
       }
@@ -278,7 +311,21 @@ export class WindowManager {
     if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
       if (playbackCoordinator.validateToken(token, callerWindowId)) {
         if (this.targetPlayingResolver) {
-          this.targetPlayingResolver();
+          this.targetPlayingResolver('target_playing');
+          this.targetPlayingResolver = null;
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 接收小窗自动播放受限处于等待用户手势确认 (保留小窗，但协调器状态保持非 playing)
+  public handleAckAwaitingUserGesture(callerWindowId: number, token: PlaybackSessionToken): boolean {
+    if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
+      if (playbackCoordinator.validateToken(token, callerWindowId)) {
+        if (this.targetPlayingResolver) {
+          this.targetPlayingResolver('awaiting_gesture');
           this.targetPlayingResolver = null;
         }
         return true;
@@ -291,6 +338,14 @@ export class WindowManager {
   public handleReportPiPPlaybackError(callerWindowId: number, error: string): boolean {
     if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
       console.warn('[WindowManager] PiP reported playback failure, rolling back to main window:', error);
+      if (this.targetPlayingResolver) {
+        this.targetPlayingResolver(false);
+        this.targetPlayingResolver = null;
+      }
+      if (this.pipReadyResolver) {
+        this.pipReadyResolver(false);
+        this.pipReadyResolver = null;
+      }
       this.closePiPWindow();
       return true;
     }

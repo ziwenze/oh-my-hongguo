@@ -10,7 +10,8 @@
     "dist/**/*",
     "dist-electron/**/*",
     "package.json",
-    "vendor/openhongguo/**/*"
+    "vendor/openhongguo/**/*",
+    "tests/fixtures/**/*"
   ],
   "asar": true,
   "asarUnpack": [

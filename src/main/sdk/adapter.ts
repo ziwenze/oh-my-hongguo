@@ -1,8 +1,12 @@
-import { createClient, fileProfileStore } from 'openhongguo';
+import { createClient, fileProfileStore, memoryProfileStore } from 'openhongguo';
 import electron from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import type {
   DramaSummary,
   EpisodeItem,
@@ -185,17 +189,35 @@ export function createMockClient() {
     resolvePlayback: async (episodeId: string) => {
       let streamUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
       try {
-        const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/sample.webm');
-        if (fsSync.existsSync(fixturePath)) {
-          const buf = fsSync.readFileSync(fixturePath);
-          streamUrl = `data:video/webm;base64,${buf.toString('base64')}`;
+        const candidates = [
+          path.resolve(process.cwd(), 'tests/fixtures/sample.webm'),
+          path.resolve(__dirname, '../../tests/fixtures/sample.webm'),
+          path.resolve(__dirname, '../tests/fixtures/sample.webm'),
+        ];
+        if (typeof process.resourcesPath === 'string') {
+          candidates.unshift(path.join(process.resourcesPath, 'fixtures/sample.webm'));
+          candidates.unshift(path.join(process.resourcesPath, 'tests/fixtures/sample.webm'));
+        }
+        try {
+          if (app?.getAppPath) {
+            candidates.unshift(path.join(app.getAppPath(), 'tests/fixtures/sample.webm'));
+          }
+        } catch {}
+
+        for (const cand of candidates) {
+          if (cand && fsSync.existsSync(cand)) {
+            const buf = fsSync.readFileSync(cand);
+            streamUrl = `data:video/webm;base64,${buf.toString('base64')}`;
+            break;
+          }
         }
       } catch {}
+      console.log('[Mock SDK] resolvePlayback streamUrl type:', streamUrl.startsWith('data:') ? 'data:video/webm' : 'remote URL');
 
       return {
         playback: {
           episode_id: episodeId,
-          duration_seconds: 120,
+          duration_seconds: 7.8, // sample.webm 真实媒体时长
           expires_at: Math.floor(Date.now() / 1000) + 7200,
           protected: false,
           streams: [
@@ -225,6 +247,16 @@ export class SdkAdapter {
       this.profileDir = process.env.OHG_CONFIG_DIR ? process.env.OHG_CONFIG_DIR : path.join(baseDir, 'profile');
       this.profilePath = path.join(this.profileDir, 'anonymous.json');
     }
+  }
+
+  // 离线/打包验收测试：直接实例化解包后的 Go WebAssembly 运行时并校验方法表挂载
+  public async verifyWasmRuntime(): Promise<boolean> {
+    const store = memoryProfileStore();
+    const client = await createClient({
+      profile: store,
+      retryAttempts: 1,
+    });
+    return typeof client?.getSeries === 'function';
   }
 
   // 并发安全的单例初始化 (共享 in-flight Promise)
