@@ -94,13 +94,19 @@ export class PlaybackSessionCoordinator {
 
     this.currentSession.positionSeconds = pos;
     this.currentSession.durationSeconds = dur;
-    this.hasActuallyPlayed = true;
 
-    // 节流落盘
-    const now = Date.now();
-    if (now - this.lastSaveTimestamp >= this.throttleMs) {
-      this.lastSaveTimestamp = now;
-      await this.syncToHistoryStore();
+    // 严密约束：仅在会话处于实际 playing 状态或 ready 态且发生正向位移时，才认可为真实播放
+    if (this.currentSession.status === 'playing' || (this.currentSession.status === 'ready' && pos > 0)) {
+      this.hasActuallyPlayed = true;
+    }
+
+    // 只有在确已实际播放的情况下，才执行节流落盘，防止 resolving 或 error 态的虚假进度写入
+    if (this.hasActuallyPlayed) {
+      const now = Date.now();
+      if (now - this.lastSaveTimestamp >= this.throttleMs) {
+        this.lastSaveTimestamp = now;
+        await this.syncToHistoryStore();
+      }
     }
   }
 

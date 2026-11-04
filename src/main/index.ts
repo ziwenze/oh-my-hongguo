@@ -12,6 +12,14 @@ import type { FavoriteItem, PlaybackSessionState, SystemDiagnostics, WatchHistor
 const { app, BrowserWindow, ipcMain, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// 安全设置 userData 目录，隔离在独立空间，避免 Chromium 默认路径权限冲突
+const defaultUserData = process.env.OHG_USER_DATA_DIR || path.join(app.getPath('appData'), 'OhMyHongguo');
+try {
+  app.setPath('userData', defaultUserData);
+} catch {
+  app.setPath('userData', path.join(app.getPath('temp'), 'oh-my-hongguo'));
+}
+
 let mainWindow: BrowserWindowType | null = null;
 
 // 严格限定生产模式可信 origin 为打包目录下的 dist
@@ -365,6 +373,36 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   createWindow();
   setupSystemTray(getMainWindow);
+
+  // 自动化 GUI 冒烟测试模式 (验证 BrowserWindow 启动、Preload 注入与 IPC 往返)
+  if (process.env.OHG_SMOKE_TEST === '1' && mainWindow) {
+    const smokeTimeout = setTimeout(() => {
+      console.error('[Smoke] Timeout waiting for did-finish-load');
+      process.exit(1);
+    }, 15000);
+
+    mainWindow.webContents.on('did-finish-load', async () => {
+      clearTimeout(smokeTimeout);
+      console.log('[Smoke] Window loaded index.html successfully!');
+      try {
+        const hasApi = await mainWindow!.webContents.executeJavaScript('Boolean(window.electronAPI)');
+        if (!hasApi) throw new Error('window.electronAPI not exposed in renderer frame');
+
+        const diag = await mainWindow!.webContents.executeJavaScript('window.electronAPI.getDiagnostics()');
+        if (!diag || !diag.electronVersion) throw new Error('getDiagnostics failed over IPC');
+        console.log('[Smoke] Verified ContextBridge IPC roundtrip in real window frame:', diag);
+
+        mainWindow?.destroy();
+        app.quit();
+        process.exit(0);
+      } catch (err) {
+        console.error('[Smoke] Failure in renderer context:', err);
+        mainWindow?.destroy();
+        app.quit();
+        process.exit(1);
+      }
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -120,6 +120,50 @@ test('DataStore offline unit test suite', async (t) => {
     assert.equal(found.positionSeconds, 88);
   });
 
+  await t.test('6. Concurrent interleaved async write vs flushSync: abort guard prevents stale overwrite', async () => {
+    const dsInterleaved = new DataStore(testBaseDir);
+    await dsInterleaved.load();
+
+    // 触发写入并排入异步队列
+    await dsInterleaved.saveHistory({
+      seriesId: 'series_v1',
+      seriesTitle: '版本1',
+      episodeId: 'ep_1',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
+      positionSeconds: 10,
+      durationSeconds: 100,
+      progressPercentage: 10,
+      updatedAt: 1000,
+    });
+    const pendingAsync = dsInterleaved.flushAsync();
+
+    // 紧接着写入最新版本 V2 并调用 flushSync 同步落盘
+    await dsInterleaved.saveHistory({
+      seriesId: 'series_v2_latest',
+      seriesTitle: '最新版本2',
+      episodeId: 'ep_2',
+      episodeNumber: 2,
+      episodeTitle: '第2集',
+      positionSeconds: 99,
+      durationSeconds: 100,
+      progressPercentage: 99,
+      updatedAt: 2000,
+    });
+    dsInterleaved.flushSync();
+
+    // 等待先前排队的异步操作结束
+    await pendingAsync;
+
+    // 验证磁盘上必须保留最新的 V2 数据
+    const dsCheck = new DataStore(testBaseDir);
+    await dsCheck.load();
+    const history = await dsCheck.getHistory();
+    const v2Found = history.find((h) => h.seriesId === 'series_v2_latest');
+    assert.ok(v2Found, 'Latest V2 must be preserved on disk despite pending V1 async write');
+    assert.equal(v2Found.positionSeconds, 99);
+  });
+
   // 测试完毕清理
   await fs.rm(testBaseDir, { recursive: true, force: true });
 });

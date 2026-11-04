@@ -38,7 +38,7 @@ jobs:
 
       - name: Run Electron smoke test (Linux with xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum npx electron --no-sandbox tests/electronSmoke.mjs
+        run: xvfb-run --auto-servernum npm run test:smoke
 
       - name: Run Electron smoke test (macOS & Windows)
         if: runner.os != 'Linux'

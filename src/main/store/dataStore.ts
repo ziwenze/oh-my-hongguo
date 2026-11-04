@@ -162,15 +162,20 @@ export class DataStore {
     const verify = await fs.readFile(uniqueTmp, 'utf8');
     JSON.parse(verify);
 
-    // 3. 系统原子重命名覆盖目标文件
-    await fs.rename(uniqueTmp, this.filePath);
+    // 3. 落盘版本守卫 (Abort Guard)：若在此期间 flushSync 或更新的写入已落盘更高版本，中止本次重命名
+    if (this.lastWrittenVersion >= versionToWrite) {
+      await fs.rm(uniqueTmp, { force: true }).catch(() => {});
+      return;
+    }
 
-    // 4. 同步更新备份文件
+    // 4. 系统原子重命名覆盖目标文件
+    await fs.rename(uniqueTmp, this.filePath);
+    this.lastWrittenVersion = Math.max(this.lastWrittenVersion, versionToWrite);
+
+    // 5. 同步更新备份文件 (确保主文件写入成功后再更新 .bak，绝不同时破坏最后一份有效状态)
     await fs.copyFile(this.filePath, this.backupPath).catch((err) => {
       console.warn('[DataStore] Failed to update .bak file:', err);
     });
-
-    this.lastWrittenVersion = Math.max(this.lastWrittenVersion, versionToWrite);
   }
 
   public flushSync(): void {
