@@ -83,8 +83,16 @@ export interface PlaybackMediaSource {
 // 播放状态枚举
 export type PlaybackStatus = 'idle' | 'resolving' | 'ready' | 'playing' | 'paused' | 'ended' | 'error';
 
+// 播放会话所有权凭证 (跨窗口与跨分集隔离)
+export interface PlaybackSessionToken {
+  sessionId: string;
+  generation: number;
+  ownerWindowId: number;
+}
+
 // 活跃播放会话模型
 export interface PlaybackSessionState {
+  token: PlaybackSessionToken;
   seriesId: string;
   seriesTitle: string;
   episodeId: string;
@@ -136,7 +144,7 @@ export interface IElectronAPI {
   getEpisodes(seriesId: string, options?: { cursor?: string; pageSize?: number }): Promise<PageResult<EpisodeItem>>;
   getShortRank(options?: { content?: string; board?: string; cursor?: string }): Promise<PageResult<RankDramaItem>>;
 
-  // 播放协调 (阶段 0 决策后接入)
+  // 播放协调 (支持会话身份隔离与窗口所有权)
   resolvePlaybackSource(episodeId: string): Promise<PlaybackMediaSource>;
   startSession(session: {
     seriesId: string;
@@ -146,11 +154,19 @@ export interface IElectronAPI {
     episodeTitle: string;
     positionSeconds?: number;
     durationSeconds?: number;
-  }): Promise<PlaybackSessionState>;
-  updateSessionStatus(status: PlaybackStatus, errorMessage?: string): Promise<void>;
-  updateSessionProgress(progress: { positionSeconds: number; durationSeconds?: number }): Promise<void>;
+  }): Promise<PlaybackSessionToken>;
+  updateSessionStatus(token: PlaybackSessionToken, status: PlaybackStatus, errorMessage?: string): Promise<boolean>;
+  updateSessionProgress(
+    token: PlaybackSessionToken,
+    progress: { positionSeconds: number; durationSeconds?: number }
+  ): Promise<boolean>;
   getCurrentSession(): Promise<PlaybackSessionState | null>;
-  closeSession(): Promise<void>;
+  closeSession(token?: PlaybackSessionToken): Promise<boolean>;
+
+  // 独立置顶摸鱼小窗 (PiP)
+  openPiPWindow(): Promise<boolean>;
+  closePiPWindow(): Promise<boolean>;
+  isPiPActive(): Promise<boolean>;
 
   // 本地持久化 (历史记录与收藏)
   getHistory(): Promise<WatchHistoryItem[]>;

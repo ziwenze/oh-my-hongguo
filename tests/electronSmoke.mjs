@@ -55,6 +55,9 @@ async function run() {
     'toggleFavorite',
     'toggleAlwaysOnTop',
     'getDiagnostics',
+    'openPiPWindow',
+    'closePiPWindow',
+    'isPiPActive',
   ];
   for (const api of expectedApis) {
     assert.ok(preloadContent.includes(api), `Preload bundle must expose "${api}" in contextBridge`);

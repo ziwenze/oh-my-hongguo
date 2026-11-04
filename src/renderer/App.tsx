@@ -9,12 +9,18 @@ import { DiscoverView } from './views/DiscoverView.js';
 import { RankingView } from './views/RankingView.js';
 import { LibraryView } from './views/LibraryView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { PiPPlayerView } from './views/PiPPlayerView.js';
 import { useDramaStore } from './store/useDramaStore.js';
 import { useLibraryStore } from './store/useLibraryStore.js';
 
 type ActiveTab = 'discover' | 'ranking' | 'search' | 'library' | 'settings';
 
 export default function App() {
+  const isPiPMode = new URLSearchParams(window.location.search).get('mode') === 'pip';
+  if (isPiPMode) {
+    return <PiPPlayerView />;
+  }
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('discover');
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   const [searchCue, setSearchCue] = useState('');

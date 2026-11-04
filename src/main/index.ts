@@ -1,15 +1,16 @@
 import electron from 'electron';
-import type { BrowserWindow as BrowserWindowType, HandlerDetails } from 'electron';
+import type { BrowserWindow as BrowserWindowType } from 'electron';
 import path from 'node:path';
 import url from 'node:url';
 import { fileURLToPath } from 'node:url';
 import { sdkAdapter } from './sdk/adapter.js';
 import { dataStore } from './store/dataStore.js';
 import { playbackCoordinator } from './session/coordinator.js';
+import { WindowManager } from './windows/manager.js';
 import { setupSystemTray } from './tray.js';
-import type { FavoriteItem, PlaybackSessionState, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
+import type { FavoriteItem, PlaybackSessionToken, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
 
-const { app, BrowserWindow, ipcMain, shell } = electron;
+const { app, BrowserWindow, ipcMain } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 安全设置 userData 目录，隔离在独立空间，避免 Chromium 默认路径权限冲突
@@ -26,10 +27,10 @@ if (app) {
   }
 }
 
-let mainWindow: BrowserWindowType | null = null;
-
 // 严格限定生产模式可信 origin 为打包目录下的 dist
 const prodDistUrl = url.pathToFileURL(path.resolve(__dirname, '../dist/')).href;
+
+const windowManager = new WindowManager(prodDistUrl);
 
 // 验证请求来源的合法性
 function isAuthorizedSender(senderFrame: Electron.WebFrameMain | null): boolean {
@@ -52,81 +53,6 @@ function assertSender(event: Electron.IpcMainInvokeEvent): void {
   if (!isAuthorizedSender(event.senderFrame)) {
     throw new Error('[Security] Unauthorized IPC invocation from untrusted frame');
   }
-}
-
-export function getMainWindow(): BrowserWindowType | null {
-  return mainWindow;
-}
-
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 450,
-    height: 800,
-    minWidth: 360,
-    minHeight: 600,
-    show: process.env.OHG_SMOKE_TEST !== '1',
-    title: 'Oh-My-Hongguo · 红果短剧',
-    backgroundColor: '#0d0f12',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  // 严格拦截新窗口弹窗
-  mainWindow.webContents.setWindowOpenHandler((details: HandlerDetails) => {
-    const targetUrl = details.url;
-    try {
-      const parsed = new URL(targetUrl);
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
-        shell.openExternal(targetUrl).catch(() => {});
-      }
-    } catch {
-      // 忽略非法 URL
-    }
-    return { action: 'deny' };
-  });
-
-  // 严格拦截窗口内导航
-  mainWindow.webContents.on('will-navigate', (event: Electron.Event, navigationUrl: string) => {
-    let isAllowed = false;
-    try {
-      if (process.env.VITE_DEV_SERVER_URL) {
-        const allowedOrigin = new URL(process.env.VITE_DEV_SERVER_URL).origin;
-        isAllowed = new URL(navigationUrl).origin === allowedOrigin;
-      } else {
-        isAllowed = navigationUrl.startsWith(prodDistUrl);
-      }
-    } catch {
-      isAllowed = false;
-    }
-
-    if (!isAllowed) {
-      event.preventDefault();
-      try {
-        const parsed = new URL(navigationUrl);
-        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
-          shell.openExternal(navigationUrl).catch(() => {});
-        }
-      } catch {
-        // 忽略
-      }
-    }
-  });
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-  }
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
 }
 
 function registerIpcHandlers() {
@@ -207,7 +133,7 @@ function registerIpcHandlers() {
     return await sdkAdapter.resolvePlayback(episodeId.trim().slice(0, 50));
   });
 
-  // 7.5 播放会话协调与断点同步 (全字段运行时类型安全校验)
+  // 7.5 播放会话协调与断点同步 (支持 Token 校验与窗口所有权隔离)
   ipcMain.handle('playback:startSession', async (event, session: unknown) => {
     assertSender(event);
     if (!session || typeof session !== 'object') {
@@ -233,39 +159,49 @@ function registerIpcHandlers() {
         ? Math.max(0, s.durationSeconds)
         : 0;
 
-    return await playbackCoordinator.startSession({
-      seriesId: s.seriesId.trim().slice(0, 50),
-      seriesTitle,
-      episodeId: s.episodeId.trim().slice(0, 50),
-      episodeNumber,
-      episodeTitle,
-      positionSeconds,
-      durationSeconds,
-    });
+    const ownerWindowId = event.sender.id;
+    return await playbackCoordinator.startSession(
+      {
+        seriesId: s.seriesId.trim().slice(0, 50),
+        seriesTitle,
+        episodeId: s.episodeId.trim().slice(0, 50),
+        episodeNumber,
+        episodeTitle,
+        positionSeconds,
+        durationSeconds,
+      },
+      ownerWindowId
+    );
   });
 
-  ipcMain.handle('playback:updateStatus', async (event, status: unknown, errorMessage?: unknown) => {
+  ipcMain.handle('playback:updateStatus', async (event, token: unknown, status: unknown, errorMessage?: unknown) => {
     assertSender(event);
-    if (typeof status !== 'string') return;
+    if (!token || typeof token !== 'object') return false;
+    if (typeof status !== 'string') return false;
     const validStatuses = ['idle', 'resolving', 'ready', 'playing', 'paused', 'ended', 'error'];
-    if (!validStatuses.includes(status)) return;
+    if (!validStatuses.includes(status)) return false;
     const err = typeof errorMessage === 'string' ? errorMessage.slice(0, 500) : undefined;
-    await playbackCoordinator.updateStatus(status as any, err);
+    return await playbackCoordinator.updateStatus(token as PlaybackSessionToken, status as any, err, event.sender.id);
   });
 
-  ipcMain.handle('playback:updateProgress', async (event, progress: unknown) => {
+  ipcMain.handle('playback:updateProgress', async (event, token: unknown, progress: unknown) => {
     assertSender(event);
-    if (!progress || typeof progress !== 'object') return;
+    if (!token || typeof token !== 'object') return false;
+    if (!progress || typeof progress !== 'object') return false;
     const p = progress as Record<string, unknown>;
-    if (typeof p.positionSeconds !== 'number' || !Number.isFinite(p.positionSeconds) || p.positionSeconds < 0) return;
+    if (typeof p.positionSeconds !== 'number' || !Number.isFinite(p.positionSeconds) || p.positionSeconds < 0) return false;
     const dur =
       typeof p.durationSeconds === 'number' && Number.isFinite(p.durationSeconds) && p.durationSeconds >= 0
         ? p.durationSeconds
         : undefined;
-    await playbackCoordinator.updateProgress({
-      positionSeconds: p.positionSeconds,
-      durationSeconds: dur,
-    });
+    return await playbackCoordinator.updateProgress(
+      token as PlaybackSessionToken,
+      {
+        positionSeconds: p.positionSeconds,
+        durationSeconds: dur,
+      },
+      event.sender.id
+    );
   });
 
   ipcMain.handle('playback:getCurrentSession', async (event) => {
@@ -273,9 +209,9 @@ function registerIpcHandlers() {
     return playbackCoordinator.getCurrentSession();
   });
 
-  ipcMain.handle('playback:closeSession', async (event) => {
+  ipcMain.handle('playback:closeSession', async (event, token?: unknown) => {
     assertSender(event);
-    await playbackCoordinator.closeSession();
+    return await playbackCoordinator.closeSession(token as PlaybackSessionToken | undefined, event.sender.id);
   });
 
   // 8. 历史记录 (严格字段校验)
@@ -347,12 +283,28 @@ function registerIpcHandlers() {
     return await dataStore.toggleFavorite(fav);
   });
 
-  // 10. 窗口控制
+  // 10. 独立置顶摸鱼小窗 (PiP) 与窗口控制
+  ipcMain.handle('window:openPiP', async (event) => {
+    assertSender(event);
+    return await windowManager.openPiPWindow();
+  });
+
+  ipcMain.handle('window:closePiP', async (event) => {
+    assertSender(event);
+    return await windowManager.closePiPWindow();
+  });
+
+  ipcMain.handle('window:isPiPActive', async (event) => {
+    assertSender(event);
+    return windowManager.isPiPActive();
+  });
+
   ipcMain.handle('window:toggleAlwaysOnTop', async (event) => {
     assertSender(event);
-    if (!mainWindow) return false;
-    const current = mainWindow.isAlwaysOnTop();
-    mainWindow.setAlwaysOnTop(!current);
+    const mainWin = windowManager.getMainWindow();
+    if (!mainWin) return false;
+    const current = mainWin.isAlwaysOnTop();
+    mainWin.setAlwaysOnTop(!current);
     return !current;
   });
 
@@ -378,8 +330,8 @@ app.whenReady().then(async () => {
   }
 
   registerIpcHandlers();
-  createWindow();
-  setupSystemTray(getMainWindow);
+  const mainWindow = windowManager.createMainWindow();
+  setupSystemTray(() => windowManager.getMainWindow());
 
   // 自动化 GUI 冒烟测试模式 (验证 BrowserWindow 启动、Preload 注入与全业务 IPC 往返)
   if (process.env.OHG_SMOKE_TEST === '1' && mainWindow) {
@@ -432,7 +384,7 @@ app.whenReady().then(async () => {
             throw new Error('History persistence over IPC failed');
           }
 
-          const session = await window.electronAPI.startSession({
+          const token = await window.electronAPI.startSession({
             seriesId: 'mock_series_1',
             seriesTitle: '测试精选短剧1',
             episodeId: 'ep_1',
@@ -441,14 +393,18 @@ app.whenReady().then(async () => {
             positionSeconds: 22.5,
             durationSeconds: 120,
           });
-          if (session.status !== 'resolving') throw new Error('startSession must start in resolving status');
+          if (!token || !token.sessionId) throw new Error('startSession must return a valid session token');
 
-          await window.electronAPI.updateSessionStatus('ready');
-          await window.electronAPI.updateSessionProgress({ positionSeconds: 30, durationSeconds: 120 });
+          const readySuccess = await window.electronAPI.updateSessionStatus(token, 'ready');
+          if (!readySuccess) throw new Error('updateSessionStatus to ready failed');
+
+          const progSuccess = await window.electronAPI.updateSessionProgress(token, { positionSeconds: 30, durationSeconds: 120 });
+          if (!progSuccess) throw new Error('updateSessionProgress failed');
+
           const curr = await window.electronAPI.getCurrentSession();
           if (!curr || curr.status !== 'ready') throw new Error('Session state transition failed');
 
-          await window.electronAPI.closeSession();
+          await window.electronAPI.closeSession(token);
 
           const source = await window.electronAPI.resolvePlaybackSource('ep_1');
           if (!source || !source.streams || source.streams.length === 0) throw new Error('resolvePlaybackSource failed');
@@ -479,9 +435,14 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      windowManager.createMainWindow();
     }
   });
+});
+
+app.on('before-quit', () => {
+  playbackCoordinator.closeSessionSync();
+  dataStore.flushSync();
 });
 
 app.on('window-all-closed', () => {

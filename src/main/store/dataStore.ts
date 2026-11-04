@@ -232,6 +232,10 @@ export class DataStore {
   }
 
   public async saveHistory(item: WatchHistoryItem): Promise<void> {
+    if (this.isClosed) {
+      console.warn('[DataStore] Blocked saveHistory on closed store');
+      return;
+    }
     await this.load();
     this.currentMemoryVersion++;
     const idx = this.cache.history.findIndex((h) => h.seriesId === item.seriesId);
@@ -246,7 +250,25 @@ export class DataStore {
     this.triggerSave();
   }
 
+  public saveHistorySync(item: WatchHistoryItem): void {
+    this.currentMemoryVersion++;
+    const idx = this.cache.history.findIndex((h) => h.seriesId === item.seriesId);
+    if (idx >= 0) {
+      this.cache.history[idx] = { ...item, updatedAt: Date.now() };
+    } else {
+      this.cache.history.unshift({ ...item, updatedAt: Date.now() });
+      if (this.cache.history.length > 200) {
+        this.cache.history.pop();
+      }
+    }
+    this.flushSync();
+  }
+
   public async clearHistory(): Promise<void> {
+    if (this.isClosed) {
+      console.warn('[DataStore] Blocked clearHistory on closed store');
+      return;
+    }
     await this.load();
     this.currentMemoryVersion++;
     this.cache.history = [];
@@ -260,6 +282,10 @@ export class DataStore {
   }
 
   public async toggleFavorite(item: FavoriteItem): Promise<boolean> {
+    if (this.isClosed) {
+      console.warn('[DataStore] Blocked toggleFavorite on closed store');
+      return false;
+    }
     await this.load();
     this.currentMemoryVersion++;
     const idx = this.cache.favorites.findIndex((f) => f.seriesId === item.seriesId);

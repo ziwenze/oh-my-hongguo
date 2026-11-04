@@ -7,12 +7,13 @@ import {
   VolumeX,
   Maximize,
   Minimize,
+  PictureInPicture2,
   ChevronLeft,
   ChevronRight,
   RefreshCw,
   ShieldAlert,
 } from 'lucide-react';
-import type { DramaSummary, EpisodeItem } from '../../shared/types.js';
+import type { DramaSummary, EpisodeItem, PlaybackSessionToken } from '../../shared/types.js';
 import { WebPlayerAdapter } from '../player/WebPlayerAdapter.js';
 
 interface PlayerModalProps {
@@ -55,10 +56,11 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastWheelTimestamp = useRef(0);
 
-  // 异步请求时序与去重保护
+  // 异步请求时序、代际与会话所有权 Token
   const activeGenerationRef = useRef(0);
   const inFlightEpisodeIdRef = useRef<string | null>(null);
   const hasMountedRef = useRef(false);
+  const sessionTokenRef = useRef<PlaybackSessionToken | null>(null);
 
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId) || {
     id: currentEpisodeId,
@@ -79,22 +81,32 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       onTimeUpdate: (curr, dur) => {
         setCurrentTime(curr);
         setDuration(dur);
-        window.electronAPI.updateSessionProgress({
-          positionSeconds: curr,
-          durationSeconds: dur,
-        }).catch(() => {});
+        if (sessionTokenRef.current) {
+          window.electronAPI.updateSessionProgress(sessionTokenRef.current, {
+            positionSeconds: curr,
+            durationSeconds: dur,
+          }).catch(() => {});
+        }
       },
       onPlayStateChange: (playing) => {
         setIsPlaying(playing);
-        window.electronAPI.updateSessionStatus(playing ? 'playing' : 'paused').catch(() => {});
+        if (sessionTokenRef.current) {
+          window.electronAPI
+            .updateSessionStatus(sessionTokenRef.current, playing ? 'playing' : 'paused')
+            .catch(() => {});
+        }
       },
       onEnded: () => {
-        window.electronAPI.updateSessionStatus('ended').catch(() => {});
+        if (sessionTokenRef.current) {
+          window.electronAPI.updateSessionStatus(sessionTokenRef.current, 'ended').catch(() => {});
+        }
         handleNextEpisode();
       },
       onError: (err) => {
         console.warn('[PlayerModal] Video error event:', err.message);
-        window.electronAPI.updateSessionStatus('error', err.message).catch(() => {});
+        if (sessionTokenRef.current) {
+          window.electronAPI.updateSessionStatus(sessionTokenRef.current, 'error', err.message).catch(() => {});
+        }
         setErrorStatus({
           code: 'PLAYBACK_DECODE_ERROR',
           title: '媒体流解码或网络受限',
@@ -111,11 +123,14 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     return () => {
       adapter.destroy();
       playerRef.current = null;
-      window.electronAPI.closeSession().catch(() => {});
+      if (sessionTokenRef.current) {
+        window.electronAPI.closeSession(sessionTokenRef.current).catch(() => {});
+        sessionTokenRef.current = null;
+      }
     };
   }, []);
 
-  // 2. 统一切集控制器 (带 generation 防竞态、同集去重与严格状态机)
+  // 2. 统一切集控制器 (带 Token 所有权、generation 防竞态、同集去重与严格状态机)
   const switchEpisode = useCallback(
     async (targetEpisodeId: string, resumeSeconds = 0, force = false) => {
       if (!force && inFlightEpisodeIdRef.current === targetEpisodeId && isLoading) {
@@ -135,8 +150,8 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       const epNumber = ep?.number || 1;
 
       try {
-        // 步骤 A: 启动会话为 resolving 态，不冒充 playing 写入历史
-        await window.electronAPI.startSession({
+        // 步骤 A: 启动会话为 resolving 态，签发专属 Session Token
+        const token = await window.electronAPI.startSession({
           seriesId: drama.id,
           seriesTitle: drama.title,
           episodeId: targetEpisodeId,
@@ -146,10 +161,15 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           durationSeconds: 0,
         });
 
+        // 若切集已被新操作覆盖，放弃过期的 token
+        if (activeGenerationRef.current !== currentGen) {
+          return;
+        }
+        sessionTokenRef.current = token;
+
         // 步骤 B: 解析媒体播放模型
         const source = await window.electronAPI.resolvePlaybackSource(targetEpisodeId);
 
-        // 防竞态检查：若该请求已被后续切集覆盖，立即丢弃
         if (activeGenerationRef.current !== currentGen) {
           return;
         }
@@ -159,7 +179,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
         // 步骤 C: 阶段 0 准入状态检查：CENC 受保护流
         if (source.protected) {
-          await window.electronAPI.updateSessionStatus('error', 'DRM_PROTECTED_GATE');
+          await window.electronAPI.updateSessionStatus(token, 'error', 'DRM_PROTECTED_GATE');
           setErrorStatus({
             code: 'DRM_PROTECTED_GATE',
             title: '受保护媒体 (阶段 0 决策门槛)',
@@ -172,15 +192,16 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
         // 步骤 D: 载入播放器适配器
         if (playerRef.current) {
-          // 媒体源已就绪，进入 ready 状态；后续只有当底层 video 触发真实的 playing 事件后，才由事件驱动提升至 playing
-          await window.electronAPI.updateSessionStatus('ready');
+          await window.electronAPI.updateSessionStatus(token, 'ready');
           await playerRef.current.load(source, resumeSeconds);
           if (activeGenerationRef.current !== currentGen) return;
           setCurrentDefinition(playerRef.current.getCurrentDefinition());
         }
       } catch (err: any) {
         if (activeGenerationRef.current !== currentGen) return;
-        await window.electronAPI.updateSessionStatus('error', err.message);
+        if (sessionTokenRef.current) {
+          await window.electronAPI.updateSessionStatus(sessionTokenRef.current, 'error', err.message);
+        }
         console.warn('[PlayerModal] resolvePlaybackSource error:', err.message);
         if (err.message && err.message.includes('ANONYMOUS_LIMITED')) {
           setErrorStatus({
@@ -501,6 +522,18 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
                 <option value={2.0}>2.0x</option>
                 <option value={3.0}>3.0x</option>
               </select>
+
+              <button
+                onClick={async () => {
+                  playerRef.current?.pause();
+                  await window.electronAPI.openPiPWindow();
+                  onClose();
+                }}
+                title="开启独立置顶摸鱼小窗 (PiP)"
+                className="p-1 text-gray-300 hover:text-primary transition-colors"
+              >
+                <PictureInPicture2 className="w-3.5 h-3.5" />
+              </button>
 
               <button
                 onClick={() => setIsFullscreen((f) => !f)}

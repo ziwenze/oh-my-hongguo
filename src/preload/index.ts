@@ -15,10 +15,17 @@ const api: IElectronAPI = {
 
   resolvePlaybackSource: (episodeId) => ipcRenderer.invoke('sdk:resolvePlaybackSource', episodeId),
   startSession: (session) => ipcRenderer.invoke('playback:startSession', session),
-  updateSessionStatus: (status, errorMessage) => ipcRenderer.invoke('playback:updateStatus', status, errorMessage),
-  updateSessionProgress: (progress) => ipcRenderer.invoke('playback:updateProgress', progress),
+  updateSessionStatus: (token, status, errorMessage) =>
+    ipcRenderer.invoke('playback:updateStatus', token, status, errorMessage),
+  updateSessionProgress: (token, progress) =>
+    ipcRenderer.invoke('playback:updateProgress', token, progress),
   getCurrentSession: () => ipcRenderer.invoke('playback:getCurrentSession'),
-  closeSession: () => ipcRenderer.invoke('playback:closeSession'),
+  closeSession: (token) => ipcRenderer.invoke('playback:closeSession', token),
+
+  // 独立置顶摸鱼小窗 (PiP)
+  openPiPWindow: () => ipcRenderer.invoke('window:openPiP'),
+  closePiPWindow: () => ipcRenderer.invoke('window:closePiP'),
+  isPiPActive: () => ipcRenderer.invoke('window:isPiPActive'),
 
   getHistory: () => ipcRenderer.invoke('store:getHistory'),
   saveHistory: (item) => ipcRenderer.invoke('store:saveHistory', item),
