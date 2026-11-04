@@ -308,6 +308,24 @@ function registerIpcHandlers() {
     return windowManager.handleAckPiPReady(event.sender.id);
   });
 
+  ipcMain.handle('window:ackSourcePaused', async (event, positionSeconds: unknown) => {
+    assertSender(event);
+    const pos = typeof positionSeconds === 'number' && Number.isFinite(positionSeconds) ? Math.max(0, positionSeconds) : 0;
+    return windowManager.handleAckSourcePaused(event.sender.id, pos);
+  });
+
+  ipcMain.handle('window:ackTargetPlaying', async (event, token: unknown) => {
+    assertSender(event);
+    if (!token || typeof token !== 'object') return false;
+    return await playbackCoordinator.updateStatus(token as any, 'playing', undefined, event.sender.id);
+  });
+
+  ipcMain.handle('window:reportPiPPlaybackError', async (event, _token: unknown, error: unknown) => {
+    assertSender(event);
+    const errMsg = typeof error === 'string' ? error.slice(0, 500) : 'Unknown playback error';
+    return windowManager.handleReportPiPPlaybackError(event.sender.id, errMsg);
+  });
+
   ipcMain.handle('window:toggleAlwaysOnTop', async (event) => {
     assertSender(event);
     const mainWin = windowManager.getMainWindow();

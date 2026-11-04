@@ -39,10 +39,16 @@ export const PiPPlayerView: React.FC = () => {
           window.electronAPI
             .updateSessionStatus(sessionTokenRef.current, playing ? 'playing' : 'paused')
             .catch(() => {});
+          if (playing) {
+            window.electronAPI.ackTargetPlaying(sessionTokenRef.current).catch(() => {});
+          }
         }
       },
       onError: (err) => {
         setErrorMsg(err.message || '播放失败');
+        if (sessionTokenRef.current) {
+          window.electronAPI.reportPiPPlaybackError(sessionTokenRef.current, err.message).catch(() => {});
+        }
       },
     });
 
@@ -66,6 +72,7 @@ export const PiPPlayerView: React.FC = () => {
           if (source.protected) {
             setErrorMsg('受保护媒体需待阶段 0 准入授权');
             setIsLoading(false);
+            window.electronAPI.reportPiPPlaybackError(newToken, 'DRM_PROTECTED_GATE').catch(() => {});
             return;
           }
 
@@ -77,6 +84,7 @@ export const PiPPlayerView: React.FC = () => {
           if (!unmounted) {
             setErrorMsg(err.message || '小窗加载失败');
             setIsLoading(false);
+            window.electronAPI.reportPiPPlaybackError(newToken, err.message).catch(() => {});
           }
         }
       }

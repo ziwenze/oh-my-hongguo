@@ -12,6 +12,7 @@ export class WindowManager {
   private pipWindow: BrowserWindowType | null = null;
   private prodDistUrl: string;
   private pipReadyResolver: (() => void) | null = null;
+  private sourcePausedResolver: ((pos: number) => void) | null = null;
   private openPiPPromise: Promise<boolean> | null = null;
 
   constructor(prodDistUrl: string) {
@@ -123,14 +124,25 @@ export class WindowManager {
     this.setupWindowSecurity(pip);
     this.pipWindow = pip;
 
-    // 握手屏障：单窗口发声保护，先通知主窗口暂停发声
+    // 握手屏障 1: 单窗口发声保护，先通知主窗口暂停发声并等待确认
+    let sourcePausedTimer: NodeJS.Timeout | null = null;
+    const sourcePausedPromise = new Promise<boolean>((resolve) => {
+      this.sourcePausedResolver = () => {
+        if (sourcePausedTimer) clearTimeout(sourcePausedTimer);
+        resolve(true);
+      };
+      sourcePausedTimer = setTimeout(() => {
+        resolve(true); // 主窗口未挂载播放器或超时，降级允许继续
+      }, 3000);
+    });
+
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('playback:handoff-to-pip', {
         session: currentSession,
       });
     }
 
-    // 建立 PiP 渲染帧 Ack 等待屏障 (超时 5 秒自动回滚)
+    // 握手屏障 2: 建立 PiP 渲染帧 Ack 等待屏障 (超时 5 秒自动回滚)
     let readyTimer: NodeJS.Timeout | null = null;
     const readyPromise = new Promise<boolean>((resolve) => {
       this.pipReadyResolver = () => {
@@ -149,6 +161,7 @@ export class WindowManager {
       : pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: queryString });
 
     try {
+      await sourcePausedPromise;
       await loadPromise;
       const isReady = await readyPromise;
       if (!isReady || pip.isDestroyed()) {
@@ -160,6 +173,7 @@ export class WindowManager {
       if (!pip.isDestroyed()) pip.destroy();
       this.pipWindow = null;
       this.pipReadyResolver = null;
+      this.sourcePausedResolver = null;
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         this.mainWindow.webContents.send('playback:handoff-from-pip', {
           newToken: currentSession.token,
@@ -169,10 +183,11 @@ export class WindowManager {
       return false;
     }
 
-    // 阶段 2 (Commit): 小窗渲染器 Ack 确认就绪后，原子移交所有权并签发新 Token
+    // 阶段 2 (Commit): 源窗口已暂停且小窗渲染器 Ack 确认就绪后，原子移交所有权并签发新 Token
     const newToken = playbackCoordinator.transferOwnership(pip.webContents.id);
     if (!newToken) {
       pip.destroy();
+      this.pipWindow = null;
       return false;
     }
 
@@ -185,6 +200,7 @@ export class WindowManager {
     pip.on('closed', () => {
       this.pipWindow = null;
       this.pipReadyResolver = null;
+      this.sourcePausedResolver = null;
       // 小窗关闭时，若主窗口存活，对称移交所有权回主窗口并通知恢复续播
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
@@ -197,8 +213,23 @@ export class WindowManager {
       }
     });
 
-    this.pipWindow = pip;
     return true;
+  }
+
+  // 接收源窗口暂停并提交最新断点的确认
+  public handleAckSourcePaused(callerWindowId: number, positionSeconds: number): boolean {
+    if (this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.webContents.id === callerWindowId) {
+      const sess = playbackCoordinator.getCurrentSession();
+      if (sess) {
+        playbackCoordinator.updateProgress(sess.token, { positionSeconds }, callerWindowId).catch(() => {});
+      }
+      if (this.sourcePausedResolver) {
+        this.sourcePausedResolver(positionSeconds);
+        this.sourcePausedResolver = null;
+        return true;
+      }
+    }
+    return false;
   }
 
   // 接收小窗渲染帧发出的 Ack 握手确认
@@ -209,6 +240,16 @@ export class WindowManager {
         this.pipReadyResolver = null;
         return true;
       }
+    }
+    return false;
+  }
+
+  // 小窗解码或流异常上报，触发主进程统一回滚
+  public handleReportPiPPlaybackError(callerWindowId: number, error: string): boolean {
+    if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
+      console.warn('[WindowManager] PiP reported playback failure, rolling back to main window:', error);
+      this.closePiPWindow();
+      return true;
     }
     return false;
   }

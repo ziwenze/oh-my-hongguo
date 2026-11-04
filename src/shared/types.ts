@@ -167,7 +167,10 @@ export interface IElectronAPI {
   openPiPWindow(): Promise<boolean>;
   closePiPWindow(): Promise<boolean>;
   isPiPActive(): Promise<boolean>;
+  ackSourcePaused(positionSeconds: number): Promise<boolean>;
   ackPiPReady(): Promise<boolean>;
+  ackTargetPlaying(token: PlaybackSessionToken): Promise<boolean>;
+  reportPiPPlaybackError(token: PlaybackSessionToken, error: string): Promise<boolean>;
   onHandoffToPiP(
     callback: (data: { session: PlaybackSessionState }) => void
   ): () => void;

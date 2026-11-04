@@ -40,9 +40,29 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      - name: Verify macOS Artifacts (.dmg and .zip)
+        if: runner.os == 'macOS'
+        run: |
+          ls -la release/
+          test -n "$(ls release/*.dmg 2>/dev/null)" || { echo "Missing .dmg artifact!"; exit 1; }
+          test -n "$(ls release/*.zip 2>/dev/null)" || { echo "Missing .zip artifact!"; exit 1; }
+          echo "macOS artifacts (.dmg and .zip) verified successfully."
+
       - name: Package with electron-builder (Windows)
         if: runner.os == 'Windows'
         run: npx electron-builder --win
+
+      - name: Verify Windows Artifacts (NSIS and Portable .exe)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ls -la release/
+          COUNT=$(ls -1 release/*.exe 2>/dev/null | wc -l)
+          if [ "$COUNT" -lt 2 ]; then
+            echo "Expected at least 2 .exe artifacts (NSIS installer and Portable .exe), found $COUNT"
+            exit 1
+          fi
+          echo "Windows artifacts (NSIS and Portable) verified successfully."
 
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4

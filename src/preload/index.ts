@@ -26,7 +26,10 @@ const api: IElectronAPI = {
   openPiPWindow: () => ipcRenderer.invoke('window:openPiP'),
   closePiPWindow: () => ipcRenderer.invoke('window:closePiP'),
   isPiPActive: () => ipcRenderer.invoke('window:isPiPActive'),
+  ackSourcePaused: (positionSeconds) => ipcRenderer.invoke('window:ackSourcePaused', positionSeconds),
   ackPiPReady: () => ipcRenderer.invoke('window:ackPiPReady'),
+  ackTargetPlaying: (token) => ipcRenderer.invoke('window:ackTargetPlaying', token),
+  reportPiPPlaybackError: (token, error) => ipcRenderer.invoke('window:reportPiPPlaybackError', token, error),
   onHandoffToPiP: (callback) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('playback:handoff-to-pip', handler);

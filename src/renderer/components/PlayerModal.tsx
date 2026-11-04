@@ -53,6 +53,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [isHandoffPending, setIsHandoffPending] = useState(false); // 正在独立小窗接力中
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastWheelTimestamp = useRef(0);
 
@@ -62,6 +63,8 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const hasMountedRef = useRef(false);
   const sessionTokenRef = useRef<PlaybackSessionToken | null>(null);
   const isHandoffRef = useRef(false); // 标记是否处于小窗移交状态，防止卸载时误关会话
+  const currentTimeRef = useRef(initialPosition);
+  currentTimeRef.current = currentTime;
 
   // 稳定回调引用：防止父组件 re-render 重新生成函数引用导致播放器 Effect 被清理销毁
   const onCloseRef = useRef(onClose);
@@ -127,15 +130,29 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
     playerRef.current = adapter;
 
-    // 监听主进程发来的小窗接力事件：暂停发声并关闭主窗口浮层 (标记为移交状态，绝不关闭会话)
-    const unsubHandoffTo = window.electronAPI.onHandoffToPiP(() => {
-      isHandoffRef.current = true;
+    // 监听主进程发来的小窗接力事件：暂停发声、确认源端暂停、保持播放器实例挂载 (Prepare 阶段绝不提前销毁组件)
+    const unsubHandoffTo = window.electronAPI.onHandoffToPiP(async () => {
       adapter.pause();
-      onCloseRef.current();
+      setIsPlaying(false);
+      setIsHandoffPending(true);
+      await window.electronAPI.ackSourcePaused(currentTimeRef.current);
+    });
+
+    // 监听接力迁回事件 (无论是小窗正常关闭还是接力异常回滚，均在原播放器中直接恢复)
+    const unsubHandoffFrom = window.electronAPI.onHandoffFromPiP(async ({ newToken, session: restoredSession }) => {
+      setIsHandoffPending(false);
+      isHandoffRef.current = false;
+      sessionTokenRef.current = newToken;
+      setCurrentTime(restoredSession.positionSeconds);
+      if (playerRef.current) {
+        playerRef.current.seek(restoredSession.positionSeconds);
+        playerRef.current.play().catch(() => {});
+      }
     });
 
     return () => {
       unsubHandoffTo();
+      unsubHandoffFrom();
       adapter.destroy();
       playerRef.current = null;
       // 只有在非移交场景 (用户主动关闭播放器) 时才真正关闭会话！移交场景下会话必须完整存续供小窗接管
@@ -429,6 +446,25 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {/* 独立小窗接力状态浮层 (保持播放器实例挂载，支持一键召回) */}
+        {isHandoffPending && (
+          <div className="absolute inset-0 bg-background/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-40 animate-in fade-in">
+            <PictureInPicture2 className="w-10 h-10 text-primary mb-3 animate-pulse" />
+            <h3 className="text-sm font-bold text-gray-100 mb-1">正在独立置顶小窗播放中</h3>
+            <p className="text-xs text-muted mb-4 max-w-xs leading-relaxed">
+              主窗口已安全暂停并停止发声，小窗关闭或异常时将在此处无缝接力续播
+            </p>
+            <button
+              onClick={async () => {
+                await window.electronAPI.closePiPWindow();
+              }}
+              className="px-4 py-2 bg-primary/20 hover:bg-primary/30 border border-primary/40 rounded-xl text-xs text-primary font-medium transition-colors"
+            >
+              收回并在主窗口继续播放
+            </button>
           </div>
         )}
 
