@@ -560,10 +560,13 @@ app.whenReady().then(async () => {
           video.pause();
           video.remove();
 
-          // 获取当前最新活跃会话 (由迁回后恢复播放的组件所持有) 并安全关闭
-          const activeSess = await window.electronAPI.getCurrentSession();
-          if (activeSess) {
-            await window.electronAPI.closeSession(activeSess.token);
+          // 派发 Escape 快捷键销毁 UI 弹出的 PlayerModal 并完全关闭播放会话
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          for (let i = 0; i < 20; i++) {
+            const activeSess = await window.electronAPI.getCurrentSession();
+            if (!activeSess) break;
+            await window.electronAPI.closeSession(activeSess.token).catch(() => {});
+            await new Promise((r) => setTimeout(r, 100));
           }
 
           // 验证无活跃会话时打开小窗安全回滚返回 false

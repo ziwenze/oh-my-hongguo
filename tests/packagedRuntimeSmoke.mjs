@@ -70,8 +70,9 @@ async function run() {
   };
   delete envRun1.ELECTRON_RUN_AS_NODE;
 
+  // 严格隔离：将打包程序工作目录直接置于干净的临时目录中，证明完全脱离仓库源码目录运行
   const child1 = spawn(binaryPath, commonArgs, {
-    cwd: rootDir,
+    cwd: testUserData,
     stdio: 'inherit',
     env: envRun1,
   });
@@ -95,8 +96,9 @@ async function run() {
   };
   delete envRun2.ELECTRON_RUN_AS_NODE;
 
+  // 严格隔离：重启阶段同样在干净的临时目录中运行，验证磁盘真实恢复
   const child2 = spawn(binaryPath, commonArgs, {
-    cwd: rootDir,
+    cwd: testUserData,
     stdio: 'inherit',
     env: envRun2,
   });

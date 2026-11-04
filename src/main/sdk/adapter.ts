@@ -189,25 +189,30 @@ export function createMockClient() {
     resolvePlayback: async (episodeId: string) => {
       let streamUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
       try {
-        const candidates = [
-          path.resolve(process.cwd(), 'tests/fixtures/sample.webm'),
-          path.resolve(__dirname, '../../tests/fixtures/sample.webm'),
-          path.resolve(__dirname, '../tests/fixtures/sample.webm'),
-        ];
-        if (typeof process.resourcesPath === 'string') {
-          candidates.unshift(path.join(process.resourcesPath, 'fixtures/sample.webm'));
-          candidates.unshift(path.join(process.resourcesPath, 'tests/fixtures/sample.webm'));
-        }
+        const candidates: string[] = [];
         try {
           if (app?.getAppPath) {
-            candidates.unshift(path.join(app.getAppPath(), 'tests/fixtures/sample.webm'));
+            candidates.push(path.join(app.getAppPath(), 'tests/fixtures/sample.webm'));
           }
         } catch {}
+        if (typeof process.resourcesPath === 'string') {
+          candidates.push(path.join(process.resourcesPath, 'tests/fixtures/sample.webm'));
+          candidates.push(path.join(process.resourcesPath, 'fixtures/sample.webm'));
+        }
+        // 源码与开发模式回退 (打包生产模式下 app.isPackaged 为 true，绝不依赖 process.cwd() 寻找资源)
+        if (!app?.isPackaged) {
+          candidates.push(
+            path.resolve(process.cwd(), 'tests/fixtures/sample.webm'),
+            path.resolve(__dirname, '../../tests/fixtures/sample.webm'),
+            path.resolve(__dirname, '../tests/fixtures/sample.webm')
+          );
+        }
 
         for (const cand of candidates) {
           if (cand && fsSync.existsSync(cand)) {
             const buf = fsSync.readFileSync(cand);
             streamUrl = `data:video/webm;base64,${buf.toString('base64')}`;
+            console.log('[Mock SDK] Successfully resolved sample.webm from:', cand);
             break;
           }
         }

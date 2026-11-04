@@ -142,19 +142,8 @@ export class WindowManager {
         this.targetPlayingResolver(false);
         this.targetPlayingResolver = null;
       }
-      // 小窗关闭时，若主窗口存活且会话归小窗所有，对称移交所有权回主窗口并通知恢复续播
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        const sess = playbackCoordinator.getCurrentSession();
-        if (sess && sess.token.ownerWindowId === pipWindowId) {
-          const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
-          if (returnToken) {
-            this.mainWindow.webContents.send('playback:handoff-from-pip', {
-              newToken: returnToken,
-              session: playbackCoordinator.getCurrentSession(),
-            });
-          }
-        }
-      }
+      // 小窗关闭时，幂等安全地将所有权交还主窗口并通知恢复续播
+      this.restoreOwnershipToMainWindow(pipWindowId);
     });
 
     // 握手屏障 1: 单窗口发声保护，先通知主窗口暂停发声并等待确认
@@ -262,19 +251,41 @@ export class WindowManager {
         this.pipWindow.destroy();
       }
       this.pipWindow = null;
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
-        if (returnToken) {
-          this.mainWindow.webContents.send('playback:handoff-from-pip', {
-            newToken: returnToken,
-            session: playbackCoordinator.getCurrentSession(),
-          });
-        }
-      }
+      // 幂等安全回退：小窗 destroy 时已自动触发 closed 监听，若尚未触发则在此处保证单次迁回
+      this.restoreOwnershipToMainWindow(pipWindowId);
       return false;
     }
 
     return true;
+  }
+
+  // 幂等安全的会话所有权交还主窗口机制 (杜绝 destroy 与 closed 竞态引发的双重回滚与 Token 递增)
+  private restoreOwnershipToMainWindow(sourcePipId?: number): boolean {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
+      return false;
+    }
+    const sess = playbackCoordinator.getCurrentSession();
+    if (!sess) return false;
+
+    // 状态防重：如果当前会话所有权已经属于主窗口，绝不重复迁移与派发
+    if (sess.token.ownerWindowId === this.mainWindow.webContents.id) {
+      return false;
+    }
+
+    // 来源防重：若指定了源小窗 ID，必须与当前持牌人严格匹配
+    if (typeof sourcePipId === 'number' && sess.token.ownerWindowId !== sourcePipId) {
+      return false;
+    }
+
+    const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
+    if (returnToken) {
+      this.mainWindow.webContents.send('playback:handoff-from-pip', {
+        newToken: returnToken,
+        session: playbackCoordinator.getCurrentSession(),
+      });
+      return true;
+    }
+    return false;
   }
 
   // 接收源窗口暂停并提交最新断点的确认
