@@ -16,7 +16,9 @@ import { useLibraryStore } from './store/useLibraryStore.js';
 type ActiveTab = 'discover' | 'ranking' | 'search' | 'library' | 'settings';
 
 export default function App() {
-  const isPiPMode = new URLSearchParams(window.location.search).get('mode') === 'pip';
+  const isPiPMode =
+    new URLSearchParams(window.location.search.replace(/^\?+/, '')).get('mode') === 'pip' ||
+    new URLSearchParams(window.location.hash.slice(1).replace(/^\?+/, '')).get('mode') === 'pip';
   if (isPiPMode) {
     return <PiPPlayerView />;
   }

@@ -130,10 +130,10 @@ export class WindowManager {
       }, 5000);
     });
 
-    const query = `?mode=pip&sessionId=${encodeURIComponent(currentSession.token.sessionId)}`;
+    const queryString = `mode=pip&sessionId=${encodeURIComponent(currentSession.token.sessionId)}`;
     const loadPromise = process.env.VITE_DEV_SERVER_URL
-      ? pip.loadURL(`${process.env.VITE_DEV_SERVER_URL}${query}`)
-      : pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: query });
+      ? pip.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${queryString}`)
+      : pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: queryString });
 
     try {
       await loadPromise;
