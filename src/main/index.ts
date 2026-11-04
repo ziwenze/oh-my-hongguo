@@ -408,12 +408,10 @@ app.whenReady().then(async () => {
           const curr = await window.electronAPI.getCurrentSession();
           if (!curr || curr.status !== 'ready') throw new Error('Session state transition failed');
 
-          await window.electronAPI.closeSession(token);
-
           const source = await window.electronAPI.resolvePlaybackSource('ep_1');
           if (!source || !source.streams || source.streams.length === 0) throw new Error('resolvePlaybackSource failed');
 
-          // 验证独立置顶摸鱼小窗 (PiP) 双窗口创建与会话所有权移交
+          // 验证独立置顶摸鱼小窗 (PiP) 双窗口创建与会话所有权移交 (必须在活跃会话存在时移交)
           const pipOpened = await window.electronAPI.openPiPWindow();
           if (!pipOpened) throw new Error('openPiPWindow failed');
           const isPiPActive1 = await window.electronAPI.isPiPActive();
@@ -424,6 +422,12 @@ app.whenReady().then(async () => {
           if (!pipClosed) throw new Error('closePiPWindow failed');
           const isPiPActive2 = await window.electronAPI.isPiPActive();
           if (isPiPActive2) throw new Error('isPiPActive must be false after closing PiP');
+
+          // 小窗关闭且所有权迁回后，安全结束本次测试会话
+          const tokenBack = await window.electronAPI.getCurrentSession();
+          if (tokenBack) {
+            await window.electronAPI.closeSession(tokenBack.token);
+          }
 
           return {
             diagPlatform: diag.platform,
