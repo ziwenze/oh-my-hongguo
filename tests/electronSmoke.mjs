@@ -63,15 +63,9 @@ async function run() {
 
   // 4. 启动真实的 Electron 应用 GUI 进程 (验证 BrowserWindow 启动、Preload 注入与 IPC 往返)
   console.log('[Smoke] 4. Launching real Electron BrowserWindow to verify GUI & IPC roundtrip...');
-  const electronBin = path.join(
-    rootDir,
-    'node_modules/electron/dist',
-    process.platform === 'darwin'
-      ? 'Electron.app/Contents/MacOS/Electron'
-      : process.platform === 'win32'
-      ? 'electron.exe'
-      : 'electron'
-  );
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const electronBin = require('electron'); // 获取平台自动解析的 Electron 可执行文件路径
 
   const testUserData = path.join(os.tmpdir(), `ohg_smoke_${Date.now()}`);
   await fs.mkdir(testUserData, { recursive: true });
