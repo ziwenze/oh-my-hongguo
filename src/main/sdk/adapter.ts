@@ -2,6 +2,7 @@ import { createClient, fileProfileStore } from 'openhongguo';
 import electron from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import type {
   DramaSummary,
   EpisodeItem,
@@ -181,23 +182,34 @@ export function createMockClient() {
       ],
       has_more: false,
     }),
-    resolvePlayback: async (episodeId: string) => ({
-      playback: {
-        episode_id: episodeId,
-        duration_seconds: 120,
-        expires_at: Math.floor(Date.now() / 1000) + 7200,
-        protected: false,
-        streams: [
-          {
-            definition: '720p',
-            quality: 'high',
-            codec: 'h264',
-            url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-            protected: false,
-          },
-        ],
-      },
-    }),
+    resolvePlayback: async (episodeId: string) => {
+      let streamUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+      try {
+        const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/sample.webm');
+        if (fsSync.existsSync(fixturePath)) {
+          const buf = fsSync.readFileSync(fixturePath);
+          streamUrl = `data:video/webm;base64,${buf.toString('base64')}`;
+        }
+      } catch {}
+
+      return {
+        playback: {
+          episode_id: episodeId,
+          duration_seconds: 120,
+          expires_at: Math.floor(Date.now() / 1000) + 7200,
+          protected: false,
+          streams: [
+            {
+              definition: '720p',
+              quality: 'high',
+              codec: 'vp8',
+              url: streamUrl,
+              protected: false,
+            },
+          ],
+        },
+      };
+    },
   };
 }
 
