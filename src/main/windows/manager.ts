@@ -11,6 +11,7 @@ export class WindowManager {
   private mainWindow: BrowserWindowType | null = null;
   private pipWindow: BrowserWindowType | null = null;
   private prodDistUrl: string;
+  private pipReadyResolver: (() => void) | null = null;
 
   constructor(prodDistUrl: string) {
     this.prodDistUrl = prodDistUrl;
@@ -87,7 +88,7 @@ export class WindowManager {
       return true;
     }
 
-    // 阶段 1: Prepare - 创建独立小窗，保持原主窗口所有权，预加载页面
+    // 阶段 1 (Prepare): 创建独立小窗，保持原主窗口所有权，预加载页面
     const pip = new BrowserWindow({
       width: 300,
       height: 533, // 9:16 画幅
@@ -109,6 +110,26 @@ export class WindowManager {
 
     this.setupWindowSecurity(pip);
 
+    // 握手屏障：单窗口发声保护，先通知主窗口暂停发声
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('playback:handoff-to-pip', {
+        session: currentSession,
+      });
+    }
+
+    // 建立 PiP 渲染帧 Ack 等待屏障 (超时 5 秒自动回滚)
+    let readyTimer: NodeJS.Timeout | null = null;
+    const readyPromise = new Promise<boolean>((resolve) => {
+      this.pipReadyResolver = () => {
+        if (readyTimer) clearTimeout(readyTimer);
+        resolve(true);
+      };
+      readyTimer = setTimeout(() => {
+        console.warn('[WindowManager] PiP ready handshake timed out, triggering rollback');
+        resolve(false);
+      }, 5000);
+    });
+
     const query = `?mode=pip&sessionId=${encodeURIComponent(currentSession.token.sessionId)}`;
     const loadPromise = process.env.VITE_DEV_SERVER_URL
       ? pip.loadURL(`${process.env.VITE_DEV_SERVER_URL}${query}`)
@@ -116,35 +137,41 @@ export class WindowManager {
 
     try {
       await loadPromise;
+      const isReady = await readyPromise;
+      if (!isReady || pip.isDestroyed()) {
+        throw new Error('PiP window not ready or destroyed before commit');
+      }
     } catch (err) {
-      // 阶段 3 (Rollback): 页面加载异常，立即销毁并回滚，不破坏主会话
-      console.warn('[WindowManager] PiP window failed to load, rolling back handoff:', err);
-      pip.destroy();
+      // 阶段 3 (Rollback): 握手或加载失败，立即销毁小窗并通知主窗口恢复会话
+      console.warn('[WindowManager] PiP handoff failed, rolling back to main window:', err);
+      if (!pip.isDestroyed()) pip.destroy();
+      this.pipReadyResolver = null;
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('playback:handoff-from-pip', {
+          newToken: currentSession.token,
+          session: currentSession,
+        });
+      }
       return false;
     }
 
-    if (pip.isDestroyed()) {
-      return false;
-    }
-
-    // 阶段 2 (Commit): 页面就绪后原子移交会话所有权至小窗 WebContents ID
+    // 阶段 2 (Commit): 小窗渲染器 Ack 确认就绪后，原子移交所有权并签发新 Token
     const newToken = playbackCoordinator.transferOwnership(pip.webContents.id);
     if (!newToken) {
       pip.destroy();
       return false;
     }
 
-    // 主窗口切换为“小窗接力中”状态并停止主播放器发声
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('playback:handoff-to-pip', {
-        newToken,
-        session: currentSession,
-      });
-    }
+    // 将 Commit 消息与新 Token 分发给小窗渲染帧，触发开播
+    pip.webContents.send('playback:handoff-commit', {
+      newToken,
+      session: playbackCoordinator.getCurrentSession(),
+    });
 
     pip.on('closed', () => {
       this.pipWindow = null;
-      // 小窗关闭时，若主窗口存活，对称移交所有权回主窗口并通知恢复
+      this.pipReadyResolver = null;
+      // 小窗关闭时，若主窗口存活，对称移交所有权回主窗口并通知恢复续播
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         const returnToken = playbackCoordinator.transferOwnership(this.mainWindow.webContents.id);
         if (returnToken) {
@@ -158,6 +185,18 @@ export class WindowManager {
 
     this.pipWindow = pip;
     return true;
+  }
+
+  // 接收小窗渲染帧发出的 Ack 握手确认
+  public handleAckPiPReady(callerWindowId: number): boolean {
+    if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
+      if (this.pipReadyResolver) {
+        this.pipReadyResolver();
+        this.pipReadyResolver = null;
+        return true;
+      }
+    }
+    return false;
   }
 
   // 3. 关闭小窗并将所有权交还主窗口

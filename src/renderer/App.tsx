@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Compass, Trophy, Search, Bookmark, Info } from 'lucide-react';
 import type { DramaSummary } from '../shared/types.js';
 import { Navbar } from './components/Navbar.js';
@@ -119,10 +119,10 @@ export default function App() {
     }
   };
 
-  const handleClosePlayer = async () => {
+  const handleClosePlayer = useCallback(async () => {
     setActivePlayback(null);
     await loadLibrary();
-  };
+  }, [loadLibrary]);
 
   const handleSelectDrama = (drama: DramaSummary) => {
     openDramaDetail(drama);

@@ -163,14 +163,18 @@ export interface IElectronAPI {
   getCurrentSession(): Promise<PlaybackSessionState | null>;
   closeSession(token?: PlaybackSessionToken): Promise<boolean>;
 
-  // 独立置顶摸鱼小窗 (PiP)
+  // 独立置顶摸鱼小窗 (PiP) 与双向握手接力
   openPiPWindow(): Promise<boolean>;
   closePiPWindow(): Promise<boolean>;
   isPiPActive(): Promise<boolean>;
+  ackPiPReady(): Promise<boolean>;
   onHandoffToPiP(
-    callback: (data: { newToken: PlaybackSessionToken; session: PlaybackSessionState }) => void
+    callback: (data: { session: PlaybackSessionState }) => void
   ): () => void;
   onHandoffFromPiP(
+    callback: (data: { newToken: PlaybackSessionToken; session: PlaybackSessionState }) => void
+  ): () => void;
+  onHandoffCommit(
     callback: (data: { newToken: PlaybackSessionToken; session: PlaybackSessionState }) => void
   ): () => void;
 

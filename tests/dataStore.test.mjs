@@ -222,6 +222,49 @@ test('DataStore offline unit test suite', async (t) => {
     assert.equal(history.find((h) => h.seriesId === 'phantom_write_sync'), undefined);
   });
 
+  await t.test('8. Shutdown coordination: flushSync persists without blocking final close session write', async () => {
+    const dsShutdown = new DataStore(testBaseDir);
+    await dsShutdown.load();
+
+    // 模拟应用运行期间某次常规 flushSync
+    await dsShutdown.saveHistory({
+      seriesId: 'series_mid_run',
+      seriesTitle: '运行中剧集',
+      episodeId: 'ep_1',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
+      positionSeconds: 30,
+      durationSeconds: 120,
+      progressPercentage: 25,
+      updatedAt: Date.now(),
+    });
+    dsShutdown.flushSync();
+
+    // 模拟 before-quit 触发时，closeSessionSync 调用的 saveHistorySync (此时尚未调用 closeSync)
+    dsShutdown.saveHistorySync({
+      seriesId: 'series_final_exit',
+      seriesTitle: '最终退出剧集',
+      episodeId: 'ep_exit',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
+      positionSeconds: 110,
+      durationSeconds: 120,
+      progressPercentage: 91,
+      updatedAt: Date.now(),
+    });
+
+    // 随后执行 closeSync 封锁持久层
+    dsShutdown.closeSync();
+
+    // 验证：最终退出时的断点数据成功落盘，且之后的写入被阻断
+    const dsVerify = new DataStore(testBaseDir);
+    await dsVerify.load();
+    const history = await dsVerify.getHistory();
+    const exitItem = history.find((h) => h.seriesId === 'series_final_exit');
+    assert.ok(exitItem, 'Final exit position must be written to disk before closeSync seals store');
+    assert.equal(exitItem.positionSeconds, 110);
+  });
+
   // 测试完毕清理
   await fs.rm(testBaseDir, { recursive: true, force: true });
 });

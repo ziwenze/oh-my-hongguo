@@ -26,6 +26,7 @@ const api: IElectronAPI = {
   openPiPWindow: () => ipcRenderer.invoke('window:openPiP'),
   closePiPWindow: () => ipcRenderer.invoke('window:closePiP'),
   isPiPActive: () => ipcRenderer.invoke('window:isPiPActive'),
+  ackPiPReady: () => ipcRenderer.invoke('window:ackPiPReady'),
   onHandoffToPiP: (callback) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('playback:handoff-to-pip', handler);
@@ -38,6 +39,13 @@ const api: IElectronAPI = {
     ipcRenderer.on('playback:handoff-from-pip', handler);
     return () => {
       ipcRenderer.removeListener('playback:handoff-from-pip', handler);
+    };
+  },
+  onHandoffCommit: (callback) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('playback:handoff-commit', handler);
+    return () => {
+      ipcRenderer.removeListener('playback:handoff-commit', handler);
     };
   },
 

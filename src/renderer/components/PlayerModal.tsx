@@ -62,6 +62,10 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const hasMountedRef = useRef(false);
   const sessionTokenRef = useRef<PlaybackSessionToken | null>(null);
 
+  // 稳定回调引用：防止父组件 re-render 重新生成函数引用导致播放器 Effect 被清理销毁
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId) || {
     id: currentEpisodeId,
     seriesId: drama.id,
@@ -75,7 +79,9 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < episodes.length - 1;
 
-  // 1. 初始化播放适配器
+  const handleNextEpisodeRef = useRef<() => void>(() => {});
+
+  // 1. 初始化播放适配器 (生命周期严格仅与 PlayerModal 挂载/卸载绑定)
   useEffect(() => {
     const adapter = new WebPlayerAdapter({
       onTimeUpdate: (curr, dur) => {
@@ -100,7 +106,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         if (sessionTokenRef.current) {
           window.electronAPI.updateSessionStatus(sessionTokenRef.current, 'ended').catch(() => {});
         }
-        handleNextEpisode();
+        handleNextEpisodeRef.current();
       },
       onError: (err) => {
         console.warn('[PlayerModal] Video error event:', err.message);
@@ -123,7 +129,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     // 监听主进程发来的小窗接力事件：暂停发声并关闭主窗口浮层
     const unsubHandoffTo = window.electronAPI.onHandoffToPiP(() => {
       adapter.pause();
-      onClose();
+      onCloseRef.current();
     });
 
     return () => {
@@ -135,7 +141,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         sessionTokenRef.current = null;
       }
     };
-  }, [onClose]);
+  }, []); // 严格空依赖数组，杜绝父级回调刷新意外触发销毁
 
   // 2. 统一切集控制器 (带 Token 所有权、generation 防竞态、同集去重与严格状态机)
   const switchEpisode = useCallback(
@@ -253,6 +259,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     const nextEp = episodes[currentIndex + 1];
     switchEpisode(nextEp.id, 0);
   };
+  handleNextEpisodeRef.current = handleNextEpisode;
 
   // 4. 滚轮防抖切集 (触控板惯性过滤)
   const handleWheel = (e: React.WheelEvent) => {

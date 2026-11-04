@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Play, Pause, Volume2, VolumeX, RefreshCw } from 'lucide-react';
-import type { PlaybackSessionState } from '../../shared/types.js';
+import type { PlaybackSessionState, PlaybackSessionToken } from '../../shared/types.js';
 import { WebPlayerAdapter } from '../player/WebPlayerAdapter.js';
 
 export const PiPPlayerView: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<WebPlayerAdapter | null>(null);
+  const sessionTokenRef = useRef<PlaybackSessionToken | null>(null);
 
   const [session, setSession] = useState<PlaybackSessionState | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -18,70 +19,78 @@ export const PiPPlayerView: React.FC = () => {
   useEffect(() => {
     let unmounted = false;
 
-    const initPiP = async () => {
-      try {
-        const sess = await window.electronAPI.getCurrentSession();
-        if (!sess || unmounted) {
-          setErrorMsg('未检测到活跃播放会话');
-          setIsLoading(false);
-          return;
+    // 1. 初始化播放适配器
+    const adapter = new WebPlayerAdapter({
+      onTimeUpdate: (curr, dur) => {
+        setCurrentTime(curr);
+        setDuration(dur);
+        if (sessionTokenRef.current) {
+          window.electronAPI
+            .updateSessionProgress(sessionTokenRef.current, {
+              positionSeconds: curr,
+              durationSeconds: dur,
+            })
+            .catch(() => {});
         }
-
-        setSession(sess);
-        setCurrentTime(sess.positionSeconds);
-
-        const adapter = new WebPlayerAdapter({
-          onTimeUpdate: (curr, dur) => {
-            setCurrentTime(curr);
-            setDuration(dur);
-            if (sess.token) {
-              window.electronAPI.updateSessionProgress(sess.token, {
-                positionSeconds: curr,
-                durationSeconds: dur,
-              }).catch(() => {});
-            }
-          },
-          onPlayStateChange: (playing) => {
-            setIsPlaying(playing);
-            if (sess.token) {
-              window.electronAPI.updateSessionStatus(sess.token, playing ? 'playing' : 'paused').catch(() => {});
-            }
-          },
-          onError: (err) => {
-            setErrorMsg(err.message || '播放失败');
-          },
-        });
-
-        if (videoRef.current) {
-          adapter.attach(videoRef.current);
+      },
+      onPlayStateChange: (playing) => {
+        setIsPlaying(playing);
+        if (sessionTokenRef.current) {
+          window.electronAPI
+            .updateSessionStatus(sessionTokenRef.current, playing ? 'playing' : 'paused')
+            .catch(() => {});
         }
-        playerRef.current = adapter;
+      },
+      onError: (err) => {
+        setErrorMsg(err.message || '播放失败');
+      },
+    });
 
-        // 获取媒体源并播放
-        const source = await window.electronAPI.resolvePlaybackSource(sess.episodeId);
+    if (videoRef.current) {
+      adapter.attach(videoRef.current);
+    }
+    playerRef.current = adapter;
+
+    // 2. 监听主进程 Commit 消息 (携带原子移交的合法新 Token 与最新播放断点)
+    const unsubCommit = window.electronAPI.onHandoffCommit(
+      async ({ newToken, session: committedSession }) => {
         if (unmounted) return;
+        sessionTokenRef.current = newToken;
+        setSession(committedSession);
+        setCurrentTime(committedSession.positionSeconds);
 
-        if (source.protected) {
-          setErrorMsg('受保护媒体需待阶段 0 准入授权');
-          setIsLoading(false);
-          return;
-        }
+        try {
+          const source = await window.electronAPI.resolvePlaybackSource(committedSession.episodeId);
+          if (unmounted) return;
 
-        await adapter.load(source, sess.positionSeconds);
-        setIsLoading(false);
-      } catch (err: any) {
-        if (!unmounted) {
-          setErrorMsg(err.message || '小窗加载失败');
+          if (source.protected) {
+            setErrorMsg('受保护媒体需待阶段 0 准入授权');
+            setIsLoading(false);
+            return;
+          }
+
+          // 步骤 3: 收到合法 Token 后才开始缓冲播放，杜绝旧 Token 拒录与双窗口发声
+          await window.electronAPI.updateSessionStatus(newToken, 'ready');
+          await adapter.load(source, committedSession.positionSeconds);
           setIsLoading(false);
+        } catch (err: any) {
+          if (!unmounted) {
+            setErrorMsg(err.message || '小窗加载失败');
+            setIsLoading(false);
+          }
         }
       }
-    };
+    );
 
-    initPiP();
+    // 3. 向主进程发送 Ack 确认渲染帧已就绪，请求 Commit
+    window.electronAPI.ackPiPReady().catch((err) => {
+      console.warn('[PiP] ackPiPReady warning:', err);
+    });
 
     return () => {
       unmounted = true;
-      playerRef.current?.destroy();
+      unsubCommit();
+      adapter.destroy();
       playerRef.current = null;
     };
   }, []);

@@ -58,6 +58,10 @@ async function run() {
     'openPiPWindow',
     'closePiPWindow',
     'isPiPActive',
+    'ackPiPReady',
+    'onHandoffToPiP',
+    'onHandoffFromPiP',
+    'onHandoffCommit',
   ];
   for (const api of expectedApis) {
     assert.ok(preloadContent.includes(api), `Preload bundle must expose "${api}" in contextBridge`);

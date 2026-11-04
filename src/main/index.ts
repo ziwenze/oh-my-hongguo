@@ -303,6 +303,11 @@ function registerIpcHandlers() {
     return windowManager.isPiPActive();
   });
 
+  ipcMain.handle('window:ackPiPReady', async (event) => {
+    assertSender(event);
+    return windowManager.handleAckPiPReady(event.sender.id);
+  });
+
   ipcMain.handle('window:toggleAlwaysOnTop', async (event) => {
     assertSender(event);
     const mainWin = windowManager.getMainWindow();
@@ -462,8 +467,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  // 严格顺序协调：先提交活跃会话的最终断点，再安全刷写持久层并关闭
   playbackCoordinator.closeSessionSync();
-  dataStore.flushSync();
+  dataStore.closeSync();
 });
 
 app.on('window-all-closed', () => {

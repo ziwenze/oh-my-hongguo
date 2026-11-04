@@ -42,14 +42,6 @@ export class DataStore {
       this.storeDir = customDir;
       this.ensurePaths();
     }
-
-    // 优雅退出前强制刷盘
-    const app = (electron as any)?.app;
-    if (app?.on) {
-      app.on('before-quit', () => {
-        this.flushSync();
-      });
-    }
   }
 
   private ensurePaths(): void {
@@ -194,6 +186,7 @@ export class DataStore {
     }
   }
 
+  // 同步刷盘：将当前内存最新数据同步写至磁盘，保持可再写入状态
   public flushSync(): void {
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
@@ -211,10 +204,15 @@ export class DataStore {
         console.error('[DataStore] flushSync failed:', err);
       }
     }
+  }
+
+  // 同步关闭持久层：先执行最终刷盘，再标记关闭，阻止后续幽灵写入
+  public closeSync(): void {
+    this.flushSync();
     this.isClosed = true;
   }
 
-  // 优雅退出时排空写入队列
+  // 异步优雅关闭：先排空异步写入队列，再标记关闭
   public async closeAsync(): Promise<void> {
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
