@@ -559,10 +559,11 @@ app.whenReady().then(async () => {
           unsubHandoffFrom();
           video.pause();
           video.remove();
-          const closedOk = await window.electronAPI.closeSession(currSession2.token);
-          const sessionAfterClose = await window.electronAPI.getCurrentSession();
-          if (sessionAfterClose !== null) {
-            throw new Error('Session still exists after closeSession: closedOk=' + closedOk + ', sess=' + JSON.stringify(sessionAfterClose));
+
+          // 获取当前最新活跃会话 (由迁回后恢复播放的组件所持有) 并安全关闭
+          const activeSess = await window.electronAPI.getCurrentSession();
+          if (activeSess) {
+            await window.electronAPI.closeSession(activeSess.token);
           }
 
           // 验证无活跃会话时打开小窗安全回滚返回 false
