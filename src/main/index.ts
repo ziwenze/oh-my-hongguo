@@ -13,11 +13,17 @@ const { app, BrowserWindow, ipcMain, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 安全设置 userData 目录，隔离在独立空间，避免 Chromium 默认路径权限冲突
-const defaultUserData = process.env.OHG_USER_DATA_DIR || path.join(app.getPath('appData'), 'OhMyHongguo');
-try {
-  app.setPath('userData', defaultUserData);
-} catch {
-  app.setPath('userData', path.join(app.getPath('temp'), 'oh-my-hongguo'));
+if (app) {
+  const defaultUserData = process.env.OHG_USER_DATA_DIR || path.join(app.getPath('appData'), 'OhMyHongguo');
+  try {
+    app.setPath('userData', defaultUserData);
+  } catch {
+    try {
+      app.setPath('userData', path.join(app.getPath('temp'), 'oh-my-hongguo'));
+    } catch {
+      // 容错
+    }
+  }
 }
 
 let mainWindow: BrowserWindowType | null = null;

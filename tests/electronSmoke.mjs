@@ -75,16 +75,16 @@ async function run() {
     childArgs.push('--no-sandbox', '--disable-dev-shm-usage');
   }
 
+  const childEnv = { ...process.env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  childEnv.OHG_SMOKE_TEST = '1';
+  childEnv.OHG_USER_DATA_DIR = testUserData;
+  childEnv.VITE_DEV_SERVER_URL = '';
+
   const child = spawn(electronBin, childArgs, {
     cwd: rootDir,
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '',
-      OHG_SMOKE_TEST: '1',
-      OHG_USER_DATA_DIR: testUserData,
-      VITE_DEV_SERVER_URL: '',
-    },
+    env: childEnv,
   });
 
   const exitCode = await new Promise((resolve) => {
