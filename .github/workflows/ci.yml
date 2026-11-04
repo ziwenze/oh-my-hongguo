@@ -25,7 +25,9 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npx electron -v
 
       - name: Run TypeScript typecheck
         run: npm run typecheck
