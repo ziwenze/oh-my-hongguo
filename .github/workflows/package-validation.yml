@@ -1,0 +1,96 @@
+name: Package Validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'electron-builder.json'
+      - '.github/workflows/package-validation.yml'
+
+jobs:
+  validate-package:
+    name: Package & Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run build
+        run: npm run build
+
+      - name: Validate unpacked directory structure (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          npx electron-builder --dir --mac --publish never
+          test -d release/mac-arm64/Oh-My-Hongguo.app || { echo "Missing Oh-My-Hongguo.app directory!"; exit 1; }
+          test -f release/mac-arm64/Oh-My-Hongguo.app/Contents/Resources/app.asar || { echo "Missing app.asar!"; exit 1; }
+          test -f release/mac-arm64/Oh-My-Hongguo.app/Contents/Resources/app.asar.unpacked/vendor/openhongguo/dist/openhongguo.wasm || { echo "Missing unpacked openhongguo.wasm!"; exit 1; }
+          echo "macOS unpacked directory & Wasm resource verified."
+
+      - name: Validate unpacked directory structure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          npx electron-builder --dir --win --publish never
+          test -d release/win-unpacked || { echo "Missing win-unpacked directory!"; exit 1; }
+          test -f release/win-unpacked/resources/app.asar || { echo "Missing app.asar!"; exit 1; }
+          test -f release/win-unpacked/resources/app.asar.unpacked/vendor/openhongguo/dist/openhongguo.wasm || { echo "Missing unpacked openhongguo.wasm!"; exit 1; }
+          echo "Windows unpacked directory & Wasm resource verified."
+
+      - name: Build full distribution installers (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          npx electron-builder --mac --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Verify macOS Installers & Generate Checksums
+        if: runner.os == 'macOS'
+        run: |
+          ls -la release/
+          test -n "$(ls release/*.dmg 2>/dev/null)" || { echo "Missing .dmg installer!"; exit 1; }
+          test -n "$(ls release/*.zip 2>/dev/null)" || { echo "Missing .zip archive!"; exit 1; }
+          cd release && shasum -a 256 *.dmg *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
+          echo "macOS installers verified and checksummed successfully."
+
+      - name: Build full distribution installers (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          npx electron-builder --win --publish never
+
+      - name: Verify Windows Installers & Generate Checksums
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ls -la release/
+          test -n "$(ls release/*Setup*.exe 2>/dev/null)" || { echo "Missing NSIS Setup.exe!"; exit 1; }
+          test -n "$(ls release/*[Pp]ortable*.exe 2>/dev/null)" || { echo "Missing Portable.exe!"; exit 1; }
+          cd release
+          sha256sum *Setup*.exe *[Pp]ortable*.exe > SHA256SUMS.txt || true
+          cat SHA256SUMS.txt
+          echo "Windows installers verified and checksummed successfully."
+
+      - name: Upload Test Package Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*Setup*.exe
+            release/*[Pp]ortable*.exe
+            release/SHA256SUMS.txt
+          if-no-files-found: error

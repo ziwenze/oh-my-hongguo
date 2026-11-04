@@ -202,11 +202,28 @@ export class WindowManager {
       return false;
     }
 
+    // 建立目标小窗出帧开播 Ack 监听屏障
+    let targetPlayingTimer: NodeJS.Timeout | null = null;
+    const targetPlayingPromise = new Promise<boolean>((resolve) => {
+      this.targetPlayingResolver = () => {
+        if (targetPlayingTimer) clearTimeout(targetPlayingTimer);
+        resolve(true);
+      };
+      targetPlayingTimer = setTimeout(() => {
+        resolve(true); // 离线测试或待用户交互时允许存续
+      }, 3000);
+    });
+
     // 将 Commit 消息与新 Token 分发给小窗渲染帧，触发开播
     pip.webContents.send('playback:handoff-commit', {
       newToken,
       session: playbackCoordinator.getCurrentSession(),
     });
+
+    await targetPlayingPromise;
+    if (!this.pipWindow || this.pipWindow.isDestroyed()) {
+      return false;
+    }
 
     pip.on('closed', () => {
       this.pipWindow = null;
