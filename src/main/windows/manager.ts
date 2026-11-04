@@ -3,6 +3,7 @@ import type { BrowserWindow as BrowserWindowType, HandlerDetails } from 'electro
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { playbackCoordinator } from '../session/coordinator.ts';
+import type { PlaybackSessionToken } from '../../shared/types.ts';
 
 const { BrowserWindow, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,6 +14,7 @@ export class WindowManager {
   private prodDistUrl: string;
   private pipReadyResolver: (() => void) | null = null;
   private sourcePausedResolver: ((pos: number) => void) | null = null;
+  private targetPlayingResolver: (() => void) | null = null;
   private openPiPPromise: Promise<boolean> | null = null;
 
   constructor(prodDistUrl: string) {
@@ -125,6 +127,7 @@ export class WindowManager {
     this.pipWindow = pip;
 
     // 握手屏障 1: 单窗口发声保护，先通知主窗口暂停发声并等待确认
+    const isSourcePlaying = currentSession.status === 'playing';
     let sourcePausedTimer: NodeJS.Timeout | null = null;
     const sourcePausedPromise = new Promise<boolean>((resolve) => {
       this.sourcePausedResolver = () => {
@@ -132,7 +135,12 @@ export class WindowManager {
         resolve(true);
       };
       sourcePausedTimer = setTimeout(() => {
-        resolve(true); // 主窗口未挂载播放器或超时，降级允许继续
+        if (isSourcePlaying) {
+          console.warn('[WindowManager] Source window paused ack timed out while playing, triggering rollback');
+          resolve(false); // 严格回滚！发声状态下未收到暂停确认，禁止接力，保障单发声屏障
+        } else {
+          resolve(true); // 非发声状态允许继续
+        }
       }, 3000);
     });
 
@@ -161,7 +169,10 @@ export class WindowManager {
       : pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: queryString });
 
     try {
-      await sourcePausedPromise;
+      const isSourcePaused = await sourcePausedPromise;
+      if (!isSourcePaused) {
+        throw new Error('Source window failed to confirm pausing within timeout, aborting handoff to protect single-audio barrier');
+      }
       await loadPromise;
       const isReady = await readyPromise;
       if (!isReady || pip.isDestroyed()) {
@@ -217,11 +228,12 @@ export class WindowManager {
   }
 
   // 接收源窗口暂停并提交最新断点的确认
-  public handleAckSourcePaused(callerWindowId: number, positionSeconds: number): boolean {
+  public async handleAckSourcePaused(callerWindowId: number, positionSeconds: number): Promise<boolean> {
     if (this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.webContents.id === callerWindowId) {
       const sess = playbackCoordinator.getCurrentSession();
       if (sess) {
-        playbackCoordinator.updateProgress(sess.token, { positionSeconds }, callerWindowId).catch(() => {});
+        // 先确保暂停位置被协调器正式接受落盘
+        await playbackCoordinator.updateProgress(sess.token, { positionSeconds }, callerWindowId);
       }
       if (this.sourcePausedResolver) {
         this.sourcePausedResolver(positionSeconds);
@@ -238,6 +250,20 @@ export class WindowManager {
       if (this.pipReadyResolver) {
         this.pipReadyResolver();
         this.pipReadyResolver = null;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 接收小窗真正出帧开播的 Ack 确认，完成整笔接力事务闭环
+  public handleAckTargetPlaying(callerWindowId: number, token: PlaybackSessionToken): boolean {
+    if (this.pipWindow && !this.pipWindow.isDestroyed() && this.pipWindow.webContents.id === callerWindowId) {
+      if (playbackCoordinator.validateToken(token, callerWindowId)) {
+        if (this.targetPlayingResolver) {
+          this.targetPlayingResolver();
+          this.targetPlayingResolver = null;
+        }
         return true;
       }
     }

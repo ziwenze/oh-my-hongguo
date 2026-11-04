@@ -57,12 +57,9 @@ jobs:
         shell: bash
         run: |
           ls -la release/
-          COUNT=$(ls -1 release/*.exe 2>/dev/null | wc -l)
-          if [ "$COUNT" -lt 2 ]; then
-            echo "Expected at least 2 .exe artifacts (NSIS installer and Portable .exe), found $COUNT"
-            exit 1
-          fi
-          echo "Windows artifacts (NSIS and Portable) verified successfully."
+          test -n "$(ls release/*Setup*.exe 2>/dev/null)" || { echo "Missing NSIS Setup .exe artifact!"; exit 1; }
+          test -n "$(ls release/*[Pp]ortable*.exe 2>/dev/null || ls release/*.exe 2>/dev/null | grep -v Setup)" || { echo "Missing Portable .exe artifact!"; exit 1; }
+          echo "Windows artifacts (NSIS Setup and Portable .exe) verified successfully."
 
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4

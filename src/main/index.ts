@@ -311,13 +311,13 @@ function registerIpcHandlers() {
   ipcMain.handle('window:ackSourcePaused', async (event, positionSeconds: unknown) => {
     assertSender(event);
     const pos = typeof positionSeconds === 'number' && Number.isFinite(positionSeconds) ? Math.max(0, positionSeconds) : 0;
-    return windowManager.handleAckSourcePaused(event.sender.id, pos);
+    return await windowManager.handleAckSourcePaused(event.sender.id, pos);
   });
 
   ipcMain.handle('window:ackTargetPlaying', async (event, token: unknown) => {
     assertSender(event);
     if (!token || typeof token !== 'object') return false;
-    return await playbackCoordinator.updateStatus(token as any, 'playing', undefined, event.sender.id);
+    return windowManager.handleAckTargetPlaying(event.sender.id, token as PlaybackSessionToken);
   });
 
   ipcMain.handle('window:reportPiPPlaybackError', async (event, _token: unknown, error: unknown) => {
