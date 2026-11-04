@@ -52,4 +52,4 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
-          if-no-files-found: warn
+          if-no-files-found: error

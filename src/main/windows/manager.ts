@@ -12,6 +12,7 @@ export class WindowManager {
   private pipWindow: BrowserWindowType | null = null;
   private prodDistUrl: string;
   private pipReadyResolver: (() => void) | null = null;
+  private openPiPPromise: Promise<boolean> | null = null;
 
   constructor(prodDistUrl: string) {
     this.prodDistUrl = prodDistUrl;
@@ -76,7 +77,18 @@ export class WindowManager {
   }
 
   // 2. 独立置顶摸鱼小窗 (PiP) 创建与安全握手接力 (Prepare -> Commit -> Ack / Rollback)
-  public async openPiPWindow(): Promise<boolean> {
+  public openPiPWindow(): Promise<boolean> {
+    // 事务防重入：若已有打开操作在途，复用同一笔接力 Promise，杜绝重复创建并发竞争
+    if (this.openPiPPromise) {
+      return this.openPiPPromise;
+    }
+    this.openPiPPromise = this.executeOpenPiPWindow().finally(() => {
+      this.openPiPPromise = null;
+    });
+    return this.openPiPPromise;
+  }
+
+  private async executeOpenPiPWindow(): Promise<boolean> {
     const currentSession = playbackCoordinator.getCurrentSession();
     if (!currentSession) {
       return false; // 无活跃播放会话时不能移交小窗
