@@ -120,14 +120,26 @@ test('DataStore offline unit test suite', async (t) => {
     assert.equal(found.positionSeconds, 88);
   });
 
-  await t.test('6. Concurrent interleaved async write vs flushSync: abort guard prevents stale overwrite', async () => {
+  await t.test('6. Concurrent interleaved async write vs flushSync: abort guard prevents stale overwrite via controlled barrier', async () => {
     const dsInterleaved = new DataStore(testBaseDir);
     await dsInterleaved.load();
 
-    // 触发写入并排入异步队列
+    let resolveBarrier;
+    const barrierPromise = new Promise((resolve) => {
+      resolveBarrier = resolve;
+    });
+
+    let hookHit = false;
+    dsInterleaved._testPreRenameHook = async () => {
+      hookHit = true;
+      // 故意在写完 tmp 准备 rename 之前挂起，等待 flushSync 抢先落盘 V2
+      await barrierPromise;
+    };
+
+    // 触发 V1 (进度为 10 秒) 并排入异步写入队列
     await dsInterleaved.saveHistory({
-      seriesId: 'series_v1',
-      seriesTitle: '版本1',
+      seriesId: 'series_same_id',
+      seriesTitle: '交错测试剧',
       episodeId: 'ep_1',
       episodeNumber: 1,
       episodeTitle: '第1集',
@@ -138,13 +150,18 @@ test('DataStore offline unit test suite', async (t) => {
     });
     const pendingAsync = dsInterleaved.flushAsync();
 
-    // 紧接着写入最新版本 V2 并调用 flushSync 同步落盘
+    // 循环等待 hook 确认命中 (此时 V1 的 tmp 文件已序列化写入 10 秒，卡在 rename 之前)
+    while (!hookHit) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    // 在 V1 停留在 rename 之前，触发最新进度 V2 (进度更新为 99 秒) 并调用 flushSync 同步抢先落盘
     await dsInterleaved.saveHistory({
-      seriesId: 'series_v2_latest',
-      seriesTitle: '最新版本2',
-      episodeId: 'ep_2',
-      episodeNumber: 2,
-      episodeTitle: '第2集',
+      seriesId: 'series_same_id',
+      seriesTitle: '交错测试剧',
+      episodeId: 'ep_1',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
       positionSeconds: 99,
       durationSeconds: 100,
       progressPercentage: 99,
@@ -152,16 +169,21 @@ test('DataStore offline unit test suite', async (t) => {
     });
     dsInterleaved.flushSync();
 
-    // 等待先前排队的异步操作结束
+    // 释放栅栏，唤醒 V1 继续执行
+    resolveBarrier();
     await pendingAsync;
 
-    // 验证磁盘上必须保留最新的 V2 数据
+    // 验证磁盘上必须保留最新的 V2 数据 (99秒)，带有旧数据 (10秒) 的 V1 tmp 被落盘版本守卫干净阻断与清理
     const dsCheck = new DataStore(testBaseDir);
     await dsCheck.load();
     const history = await dsCheck.getHistory();
-    const v2Found = history.find((h) => h.seriesId === 'series_v2_latest');
-    assert.ok(v2Found, 'Latest V2 must be preserved on disk despite pending V1 async write');
-    assert.equal(v2Found.positionSeconds, 99);
+    const record = history.find((h) => h.seriesId === 'series_same_id');
+    assert.ok(record, 'Record must exist on disk');
+    assert.equal(
+      record.positionSeconds,
+      99,
+      'Stale V1 (10s) must NOT overwrite V2 (99s) on disk despite async race'
+    );
   });
 
   // 测试完毕清理

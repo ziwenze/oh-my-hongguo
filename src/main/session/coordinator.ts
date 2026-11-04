@@ -5,6 +5,17 @@ export interface IHistorySink {
   saveHistory(item: WatchHistoryItem): Promise<void>;
 }
 
+// 严密的状态机转换白名单：禁止非法倒退 (例如禁止 playing -> ready)
+const VALID_TRANSITIONS: Record<PlaybackStatus, PlaybackStatus[]> = {
+  idle: ['resolving'],
+  resolving: ['ready', 'playing', 'error', 'idle'],
+  ready: ['playing', 'paused', 'error', 'idle'],
+  playing: ['paused', 'ended', 'error', 'idle'],
+  paused: ['playing', 'ended', 'error', 'idle'],
+  ended: ['playing', 'resolving', 'error', 'idle'],
+  error: ['resolving', 'idle'],
+};
+
 export class PlaybackSessionCoordinator {
   private store: IHistorySink;
   private currentSession: PlaybackSessionState | null = null;
@@ -57,9 +68,18 @@ export class PlaybackSessionCoordinator {
     return { ...this.currentSession };
   }
 
-  // 2. 状态机迁移 (仅在实际触发 playing/paused/ended 后才持久化历史)
+  // 2. 状态机迁移 (严格按白名单校验，禁止状态倒退，仅在实际触发 playing/paused/ended 后才持久化历史)
   public async updateStatus(status: PlaybackStatus, errorMessage?: string): Promise<void> {
     if (!this.currentSession) return;
+
+    const currentStatus = this.currentSession.status;
+    const allowed = VALID_TRANSITIONS[currentStatus];
+    if (!allowed || !allowed.includes(status)) {
+      console.warn(
+        `[Coordinator] Blocked invalid status transition from '${currentStatus}' to '${status}'`
+      );
+      return;
+    }
 
     this.currentSession.status = status;
     if (errorMessage) {

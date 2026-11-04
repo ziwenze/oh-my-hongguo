@@ -86,6 +86,121 @@ export function normalizePlaybackSource(pb: any, fallbackEpisodeId: string): Pla
   };
 }
 
+export function createMockClient() {
+  return {
+    discover: async () => ({
+      items: [
+        {
+          id: 'mock_series_1',
+          title: '测试精选短剧1',
+          description: '测试短剧描述1',
+          cover_url: 'https://example.com/cover1.jpg',
+          episode_count: 30,
+          author: '测试作者1',
+          category: '都市逆袭',
+          heat: 15000000,
+          right_text: '全30集',
+        },
+        {
+          id: 'mock_series_2',
+          title: '测试精选短剧2',
+          description: '测试短剧描述2',
+          cover_url: 'https://example.com/cover2.jpg',
+          episode_count: 50,
+          author: '测试作者2',
+          category: '战神归来',
+          heat: 28000000,
+          right_text: '全50集',
+        },
+      ],
+      cursor: 'mock_cursor_next',
+      has_more: true,
+    }),
+    search: async (query: string) => ({
+      items: [
+        {
+          id: 'mock_series_search',
+          title: `搜索结果: ${query}`,
+          description: '匹配短剧',
+          cover_url: 'https://example.com/cover_s.jpg',
+          episode_count: 60,
+          author: '搜索作者',
+          category: '搜索分类',
+        },
+      ],
+      has_more: false,
+    }),
+    suggest: async (prefix: string) => [
+      { text: `${prefix}短剧`, keyword: `${prefix}短剧` },
+      { text: `${prefix}小说原著`, keyword: 'mock_novel_id' },
+    ],
+    hotSearch: async () => ({
+      boards: [
+        {
+          title: '短剧热搜榜',
+          items: [{ title: '热搜短剧A' }, { title: '热搜短剧B' }],
+        },
+      ],
+    }),
+    searchCues: async () => ['搜你想看：绝世战神', '搜你想看：神医赘婿'],
+    getSeries: async (seriesId: string) => ({
+      id: seriesId,
+      title: '短剧详情测试',
+      description: '完整剧目剧情简介',
+      cover_url: 'https://example.com/cover_detail.jpg',
+      episode_count: 30,
+      author: '知名作者',
+      category: '都市热血',
+      heat: 22000000,
+      right_text: '全30集',
+    }),
+    listEpisodes: async (seriesId: string, options?: any) => ({
+      items: Array.from({ length: options?.pageSize || 10 }, (_, i) => ({
+        id: `ep_${seriesId}_${i + 1}`,
+        series_id: seriesId,
+        number: i + 1,
+        title: `第${i + 1}集`,
+        playable: true,
+        is_new: i === 0,
+        cover_url: `https://example.com/ep_${i + 1}.jpg`,
+      })),
+      cursor: 'mock_ep_cursor_2',
+      has_more: true,
+    }),
+    shortRank: async () => ({
+      items: [
+        {
+          rank: 1,
+          series_id: 'mock_rank_1',
+          title: '风云榜第一名',
+          cover_url: 'https://example.com/rank1.jpg',
+          score: '9999万热度',
+          actor: '主演小张',
+          episode_count: 80,
+        },
+      ],
+      has_more: false,
+    }),
+    resolvePlayback: async (episodeId: string) => ({
+      playback: {
+        episode_id: episodeId,
+        duration_seconds: 120,
+        expires_at: Math.floor(Date.now() / 1000) + 7200,
+        protected: false,
+        streams: [
+          {
+            definition: '720p',
+            quality: 'high',
+            codec: 'h264',
+            url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+            protected: false,
+          },
+        ],
+      },
+    }),
+  };
+}
+
 export class SdkAdapter {
   private client: any = null;
   private clientInitPromise: Promise<any> | null = null;
@@ -109,6 +224,11 @@ export class SdkAdapter {
     }
 
     this.clientInitPromise = (async () => {
+      if (process.env.OHG_MOCK_SDK === '1') {
+        this.client = createMockClient();
+        console.log('[SDK Adapter] Mock SDK Client initialized for offline E2E test mode');
+        return;
+      }
       this.ensureProfilePaths();
       await fs.mkdir(this.profileDir, { recursive: true, mode: 0o700 });
       process.env.OHG_CONFIG_DIR = this.profileDir;

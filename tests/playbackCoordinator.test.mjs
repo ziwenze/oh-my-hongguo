@@ -95,5 +95,33 @@ test('PlaybackSessionCoordinator production unit tests', async (t) => {
     assert.equal(history[0].positionSeconds, 78.5);
   });
 
+  await t.test('6. Strictly prevents state regression from playing to ready', async () => {
+    await coordinator.startSession({
+      seriesId: 'series_regression_test',
+      seriesTitle: '状态机防倒退测试剧',
+      episodeId: 'ep_1',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
+      positionSeconds: 0,
+      durationSeconds: 120,
+    });
+
+    // 正常流转至 ready -> playing
+    await coordinator.updateStatus('ready');
+    assert.equal(coordinator.getCurrentSession()?.status, 'ready');
+    await coordinator.updateStatus('playing');
+    assert.equal(coordinator.getCurrentSession()?.status, 'playing');
+
+    // 模拟后发的 load() 返回尝试将状态置为 ready: 必须被阻断！
+    await coordinator.updateStatus('ready');
+    assert.equal(
+      coordinator.getCurrentSession()?.status,
+      'playing',
+      'Status must remain playing and reject regression to ready'
+    );
+
+    await ds.flushAsync();
+  });
+
   await fs.rm(testBaseDir, { recursive: true, force: true });
 });

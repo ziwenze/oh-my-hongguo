@@ -172,11 +172,11 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
         // 步骤 D: 载入播放器适配器
         if (playerRef.current) {
+          // 媒体源已就绪，进入 ready 状态；后续只有当底层 video 触发真实的 playing 事件后，才由事件驱动提升至 playing
+          await window.electronAPI.updateSessionStatus('ready');
           await playerRef.current.load(source, resumeSeconds);
           if (activeGenerationRef.current !== currentGen) return;
           setCurrentDefinition(playerRef.current.getCurrentDefinition());
-          // 标记状态为 ready；只有当底层 video 触发真实的 playing 事件后，才由事件驱动将状态提升至 playing
-          await window.electronAPI.updateSessionStatus('ready');
         }
       } catch (err: any) {
         if (activeGenerationRef.current !== currentGen) return;

@@ -381,7 +381,7 @@ app.whenReady().then(async () => {
   createWindow();
   setupSystemTray(getMainWindow);
 
-  // 自动化 GUI 冒烟测试模式 (验证 BrowserWindow 启动、Preload 注入与 IPC 往返)
+  // 自动化 GUI 冒烟测试模式 (验证 BrowserWindow 启动、Preload 注入与全业务 IPC 往返)
   if (process.env.OHG_SMOKE_TEST === '1' && mainWindow) {
     const smokeTimeout = setTimeout(() => {
       console.error('[Smoke] Timeout waiting for did-finish-load');
@@ -392,12 +392,78 @@ app.whenReady().then(async () => {
       clearTimeout(smokeTimeout);
       console.log('[Smoke] Window loaded index.html successfully!');
       try {
-        const hasApi = await mainWindow!.webContents.executeJavaScript('Boolean(window.electronAPI)');
-        if (!hasApi) throw new Error('window.electronAPI not exposed in renderer frame');
+        const testScript = `(async () => {
+          if (!window.electronAPI) throw new Error('window.electronAPI not exposed in renderer frame');
 
-        const diag = await mainWindow!.webContents.executeJavaScript('window.electronAPI.getDiagnostics()');
-        if (!diag || !diag.electronVersion) throw new Error('getDiagnostics failed over IPC');
-        console.log('[Smoke] Verified ContextBridge IPC roundtrip in real window frame:', diag);
+          const diag = await window.electronAPI.getDiagnostics();
+          if (!diag || !diag.electronVersion) throw new Error('getDiagnostics failed');
+
+          const discover = await window.electronAPI.getDiscover();
+          if (!discover.items || discover.items.length === 0) throw new Error('getDiscover returned empty items');
+
+          const detail = await window.electronAPI.getDramaDetail('mock_series_1');
+          if (!detail || detail.id !== 'mock_series_1') throw new Error('getDramaDetail failed');
+
+          const episodes = await window.electronAPI.getEpisodes('mock_series_1', { pageSize: 5 });
+          if (!episodes.items || episodes.items.length !== 5) throw new Error('getEpisodes pageSize mismatch');
+
+          const rank = await window.electronAPI.getShortRank();
+          if (!rank.items || rank.items.length === 0) throw new Error('getShortRank failed');
+
+          const suggestions = await window.electronAPI.getSearchSuggestions('战神');
+          if (!suggestions || suggestions.length === 0) throw new Error('getSearchSuggestions failed');
+
+          const hot = await window.electronAPI.getHotSearch();
+          if (!hot.hotQueries) throw new Error('getHotSearch failed');
+
+          await window.electronAPI.saveHistory({
+            seriesId: 'mock_series_1',
+            seriesTitle: '测试精选短剧1',
+            episodeId: 'ep_1',
+            episodeNumber: 1,
+            episodeTitle: '第1集',
+            positionSeconds: 22.5,
+            durationSeconds: 120,
+            progressPercentage: 18,
+            updatedAt: Date.now(),
+          });
+          const history = await window.electronAPI.getHistory();
+          if (history.length === 0 || history[0].seriesId !== 'mock_series_1') {
+            throw new Error('History persistence over IPC failed');
+          }
+
+          const session = await window.electronAPI.startSession({
+            seriesId: 'mock_series_1',
+            seriesTitle: '测试精选短剧1',
+            episodeId: 'ep_1',
+            episodeNumber: 1,
+            episodeTitle: '第1集',
+            positionSeconds: 22.5,
+            durationSeconds: 120,
+          });
+          if (session.status !== 'resolving') throw new Error('startSession must start in resolving status');
+
+          await window.electronAPI.updateSessionStatus('ready');
+          await window.electronAPI.updateSessionProgress({ positionSeconds: 30, durationSeconds: 120 });
+          const curr = await window.electronAPI.getCurrentSession();
+          if (!curr || curr.status !== 'ready') throw new Error('Session state transition failed');
+
+          await window.electronAPI.closeSession();
+
+          const source = await window.electronAPI.resolvePlaybackSource('ep_1');
+          if (!source || !source.streams || source.streams.length === 0) throw new Error('resolvePlaybackSource failed');
+
+          return {
+            diagPlatform: diag.platform,
+            discoverCount: discover.items.length,
+            episodesCount: episodes.items.length,
+            historyCount: history.length,
+            playbackStreams: source.streams.length,
+          };
+        })()`;
+
+        const smokeResult = await mainWindow!.webContents.executeJavaScript(testScript);
+        console.log('[Smoke] Successfully verified full business IPC & ContextBridge pipeline in real window:', smokeResult);
 
         mainWindow?.destroy();
         app.quit();

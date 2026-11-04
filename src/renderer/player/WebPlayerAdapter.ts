@@ -49,13 +49,14 @@ export class WebPlayerAdapter {
     this.videoEl.removeEventListener('error', this.handleError);
   }
 
-  // 为每次载入的新媒体独立布防首帧渲染回调 (符合 ROADMAP P95 统计规范)
-  private armFirstFrameMeasurement(): void {
+  // 为每次载入的新媒体独立布防首帧渲染回调 (符合 ROADMAP P95 统计规范，绑定当前代际)
+  private armFirstFrameMeasurement(gen: number): void {
     if (!this.videoEl) return;
     this.hasReportedFirstFrame = false;
     if ('requestVideoFrameCallback' in this.videoEl) {
       (this.videoEl as any).requestVideoFrameCallback(() => {
-        if (!this.hasReportedFirstFrame) {
+        // 严格代际守卫：防止旧分集排队的回调被误计入新分集首帧
+        if (this.loadGeneration === gen && !this.hasReportedFirstFrame) {
           this.hasReportedFirstFrame = true;
           this.events.onFirstFrameRendered?.();
         }
@@ -120,12 +121,12 @@ export class WebPlayerAdapter {
       this.videoEl.currentTime = initialPosition;
     }
 
-    this.armFirstFrameMeasurement();
+    this.armFirstFrameMeasurement(gen);
 
     try {
       await this.videoEl.play();
       if (this.loadGeneration !== gen) {
-        this.videoEl.pause();
+        // 代际失效隔离：新代际已接管视频元素，旧任务立即退出，绝不调用 pause() 破坏新媒体播放
         return;
       }
     } catch (e: any) {

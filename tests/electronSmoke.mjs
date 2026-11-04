@@ -78,6 +78,7 @@ async function run() {
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   childEnv.OHG_SMOKE_TEST = '1';
+  childEnv.OHG_MOCK_SDK = '1';
   childEnv.OHG_USER_DATA_DIR = testUserData;
   childEnv.VITE_DEV_SERVER_URL = '';
 

@@ -33,6 +33,9 @@ export class DataStore {
   // 内存版本与落盘版本标记，协调异步持久化与退出前 flushSync
   private currentMemoryVersion = 0;
   private lastWrittenVersion = 0;
+  private isClosed = false;
+  // 测试专用栅栏钩子 (用于构建受控并发交错点)
+  public _testPreRenameHook?: () => Promise<void>;
 
   constructor(customDir?: string) {
     if (customDir) {
@@ -169,20 +172,26 @@ export class DataStore {
     const verify = await fs.readFile(uniqueTmp, 'utf8');
     JSON.parse(verify);
 
-    // 3. 落盘版本守卫 (Abort Guard)：若在此期间 flushSync 或更新的写入已落盘更高版本，中止本次重命名
-    if (this.lastWrittenVersion >= versionToWrite) {
+    // 3. 执行受控测试栅栏钩子 (如果挂载)
+    if (this._testPreRenameHook) {
+      await this._testPreRenameHook();
+    }
+
+    // 4. 落盘版本守卫 (Abort Guard)：若在此期间 flushSync 或更新的写入已落盘更高版本，中止本次重命名
+    if (this.lastWrittenVersion >= versionToWrite || this.isClosed) {
       await fs.rm(uniqueTmp, { force: true }).catch(() => {});
       return;
     }
 
-    // 4. 系统原子重命名覆盖目标文件
-    await fs.rename(uniqueTmp, this.filePath);
-    this.lastWrittenVersion = Math.max(this.lastWrittenVersion, versionToWrite);
-
-    // 5. 同步更新备份文件 (确保主文件写入成功后再更新 .bak，绝不同时破坏最后一份有效状态)
-    await fs.copyFile(this.filePath, this.backupPath).catch((err) => {
-      console.warn('[DataStore] Failed to update .bak file:', err);
-    });
+    // 5. 同步原子操作执行重命名与备份更新 (在单核同步执行周期内不可分割完成，杜绝异步 rename 期间插入 flushSync 产生交错覆盖)
+    try {
+      fsSync.renameSync(uniqueTmp, this.filePath);
+      this.lastWrittenVersion = Math.max(this.lastWrittenVersion, versionToWrite);
+      fsSync.copyFileSync(this.filePath, this.backupPath);
+    } catch (err) {
+      await fs.rm(uniqueTmp, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 
   public flushSync(): void {
@@ -202,6 +211,18 @@ export class DataStore {
         console.error('[DataStore] flushSync failed:', err);
       }
     }
+    this.isClosed = true;
+  }
+
+  // 优雅退出时排空写入队列
+  public async closeAsync(): Promise<void> {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+      this.enqueuePersist();
+    }
+    await this.writeQueue;
+    this.isClosed = true;
   }
 
   // --- 历史记录接口 ---
