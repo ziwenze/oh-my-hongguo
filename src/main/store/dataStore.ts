@@ -30,6 +30,9 @@ export class DataStore {
   private isLoaded = false;
   // 写入锁，确保异步 persist 串行化，不产生文件争用
   private writeQueue: Promise<void> = Promise.resolve();
+  // 内存版本与落盘版本标记，协调异步持久化与退出前 flushSync
+  private currentMemoryVersion = 0;
+  private lastWrittenVersion = 0;
 
   constructor(customDir?: string) {
     if (customDir) {
@@ -149,6 +152,7 @@ export class DataStore {
   }
 
   private async executeAtomicWrite(): Promise<void> {
+    const versionToWrite = this.currentMemoryVersion;
     const data = JSON.stringify(this.cache, null, 2);
     // 1. 写入带有唯一 PID 与时间戳特征的 tmp 文件
     const uniqueTmp = `${this.tmpPath}.${process.pid}.${Date.now()}`;
@@ -165,6 +169,8 @@ export class DataStore {
     await fs.copyFile(this.filePath, this.backupPath).catch((err) => {
       console.warn('[DataStore] Failed to update .bak file:', err);
     });
+
+    this.lastWrittenVersion = Math.max(this.lastWrittenVersion, versionToWrite);
   }
 
   public flushSync(): void {
@@ -172,14 +178,17 @@ export class DataStore {
       clearTimeout(this.saveTimeout);
       this.saveTimeout = null;
     }
-    try {
-      const data = JSON.stringify(this.cache, null, 2);
-      const uniqueTmp = `${this.tmpPath}.${process.pid}.${Date.now()}.sync`;
-      fsSync.writeFileSync(uniqueTmp, data, 'utf8');
-      fsSync.renameSync(uniqueTmp, this.filePath);
-      fsSync.copyFileSync(this.filePath, this.backupPath);
-    } catch (err) {
-      console.error('[DataStore] flushSync failed:', err);
+    if (this.currentMemoryVersion > this.lastWrittenVersion) {
+      try {
+        const data = JSON.stringify(this.cache, null, 2);
+        const uniqueTmp = `${this.tmpPath}.${process.pid}.${Date.now()}.sync`;
+        fsSync.writeFileSync(uniqueTmp, data, 'utf8');
+        fsSync.renameSync(uniqueTmp, this.filePath);
+        fsSync.copyFileSync(this.filePath, this.backupPath);
+        this.lastWrittenVersion = this.currentMemoryVersion;
+      } catch (err) {
+        console.error('[DataStore] flushSync failed:', err);
+      }
     }
   }
 
@@ -191,6 +200,7 @@ export class DataStore {
 
   public async saveHistory(item: WatchHistoryItem): Promise<void> {
     await this.load();
+    this.currentMemoryVersion++;
     const idx = this.cache.history.findIndex((h) => h.seriesId === item.seriesId);
     if (idx >= 0) {
       this.cache.history[idx] = { ...item, updatedAt: Date.now() };
@@ -205,6 +215,7 @@ export class DataStore {
 
   public async clearHistory(): Promise<void> {
     await this.load();
+    this.currentMemoryVersion++;
     this.cache.history = [];
     this.triggerSave();
   }
@@ -217,6 +228,7 @@ export class DataStore {
 
   public async toggleFavorite(item: FavoriteItem): Promise<boolean> {
     await this.load();
+    this.currentMemoryVersion++;
     const idx = this.cache.favorites.findIndex((f) => f.seriesId === item.seriesId);
     let isFavorited = false;
     if (idx >= 0) {

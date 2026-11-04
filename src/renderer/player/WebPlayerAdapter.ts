@@ -32,8 +32,12 @@ export class WebPlayerAdapter {
     this.videoEl.addEventListener('play', this.handlePlay);
     this.videoEl.addEventListener('pause', this.handlePause);
     this.videoEl.addEventListener('error', this.handleError);
+  }
 
-    // 标准 video.requestVideoFrameCallback 测量首帧渲染 (符合 ROADMAP 规范)
+  // 为每次载入的新媒体独立布防首帧渲染回调 (符合 ROADMAP P95 统计规范)
+  private armFirstFrameMeasurement(): void {
+    if (!this.videoEl) return;
+    this.hasReportedFirstFrame = false;
     if ('requestVideoFrameCallback' in this.videoEl) {
       (this.videoEl as any).requestVideoFrameCallback(() => {
         if (!this.hasReportedFirstFrame) {
@@ -98,11 +102,14 @@ export class WebPlayerAdapter {
       this.videoEl.currentTime = initialPosition;
     }
 
+    this.armFirstFrameMeasurement();
+
     try {
       await this.videoEl.play();
     } catch (e: any) {
       // 浏览器可能需要交互或静音自动播放
       console.warn('[WebPlayerAdapter] Autoplay restricted or deferred:', e.message);
+      this.events.onPlayStateChange?.(false);
     }
   }
 

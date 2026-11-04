@@ -93,6 +93,33 @@ test('DataStore offline unit test suite', async (t) => {
     assert.ok(hasCorruptedArchive, 'Should archive corrupted file instead of quietly overwriting');
   });
 
+  await t.test('5. flushSync executes synchronously and updates storage immediately upon process exit', async () => {
+    const dsSync = new DataStore(testBaseDir);
+    await dsSync.load();
+
+    await dsSync.saveHistory({
+      seriesId: 'sync_test_series',
+      seriesTitle: '同步退出测试剧',
+      episodeId: 'ep_sync',
+      episodeNumber: 10,
+      episodeTitle: '第10集',
+      positionSeconds: 88,
+      durationSeconds: 120,
+      progressPercentage: 73,
+      updatedAt: Date.now(),
+    });
+
+    // 立即执行同步刷盘，不等待 500ms 防抖计时器
+    dsSync.flushSync();
+
+    const dsVerify = new DataStore(testBaseDir);
+    await dsVerify.load();
+    const list = await dsVerify.getHistory();
+    const found = list.find((h) => h.seriesId === 'sync_test_series');
+    assert.ok(found, 'flushSync should persist new record without waiting for timeout');
+    assert.equal(found.positionSeconds, 88);
+  });
+
   // 测试完毕清理
   await fs.rm(testBaseDir, { recursive: true, force: true });
 });

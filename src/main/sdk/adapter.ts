@@ -13,14 +13,88 @@ import type {
 
 const { app } = electron;
 
-class SdkAdapter {
+// --- 纯函数 DTO 规范化映射器 (可独立离线测试) ---
+
+export function normalizeDramaSummary(item: any): DramaSummary {
+  return {
+    id: String(item?.id ?? ''),
+    title: String(item?.title ?? ''),
+    description: String(item?.description ?? ''),
+    coverUrl: String(item?.cover_url ?? ''),
+    coverExpiresAt: item?.cover_expires_at ? String(item.cover_expires_at) : undefined,
+    episodeCount: Number(item?.episode_count || 0),
+    author: item?.author ? String(item.author) : undefined,
+    category: item?.category ? String(item.category) : undefined,
+    heat: typeof item?.heat === 'number' && Number.isFinite(item.heat) ? item.heat : undefined,
+    statusText: item?.right_text ? String(item.right_text) : undefined,
+  };
+}
+
+export function normalizeEpisodeItem(ep: any, fallbackSeriesId: string): EpisodeItem {
+  return {
+    id: String(ep?.id ?? ''),
+    seriesId: String(ep?.series_id || fallbackSeriesId),
+    number: Number(ep?.number || 0),
+    title: String(ep?.title || `第${ep?.number ?? 1}集`),
+    playable: ep?.playable !== false,
+    isNew: Boolean(ep?.is_new),
+    coverUrl: ep?.cover_url ? String(ep.cover_url) : undefined,
+    coverExpiresAt: ep?.cover_expires_at ? String(ep.cover_expires_at) : undefined,
+  };
+}
+
+export function normalizeSuggestionItem(item: any): SearchSuggestionItem {
+  return {
+    text: String(item?.text || item?.title || item?.keyword || ''),
+    keyword: item?.keyword ? String(item.keyword) : undefined,
+  };
+}
+
+export function normalizeRankItem(item: any, defaultRank: number): RankDramaItem {
+  return {
+    rank: Number(item?.rank || defaultRank),
+    seriesId: String(item?.series_id ?? ''),
+    title: String(item?.title ?? ''),
+    coverUrl: String(item?.cover_url ?? ''),
+    score: item?.score ? String(item.score) : undefined,
+    actor: item?.actor ? String(item.actor) : undefined,
+    episodeCount: item?.episode_count ? Number(item.episode_count) : undefined,
+    description: item?.description ? String(item.description) : undefined,
+  };
+}
+
+export function normalizePlaybackSource(pb: any, fallbackEpisodeId: string): PlaybackMediaSource {
+  const streams = (pb?.streams || []).map((s: any) => ({
+    definition: String(s?.definition || 'unknown'),
+    quality: s?.quality ? String(s.quality) : undefined,
+    codec: s?.codec ? String(s.codec) : undefined,
+    url: String(s?.url || ''),
+    backupUrl: s?.backup_url ? String(s.backup_url) : undefined,
+    protected: Boolean(s?.protected),
+    encryption: s?.encryption ? String(s.encryption) : undefined,
+  }));
+
+  return {
+    episodeId: String(pb?.episode_id || fallbackEpisodeId),
+    seriesId: '',
+    episodeNumber: 1,
+    protected: Boolean(pb?.protected),
+    durationSeconds: Number(pb?.duration_seconds || 0),
+    expiresAt: Number(pb?.expires_at || 0),
+    streams,
+    audioUrl: pb?.audio_url ? String(pb.audio_url) : undefined,
+  };
+}
+
+export class SdkAdapter {
   private client: any = null;
   private clientInitPromise: Promise<any> | null = null;
   private profileDir: string;
   private profilePath: string;
 
   constructor() {
-    this.profileDir = path.join(app.getPath('userData'), 'profile');
+    const baseDir = app?.getPath ? app.getPath('userData') : process.cwd();
+    this.profileDir = path.join(baseDir, 'profile');
     this.profilePath = path.join(this.profileDir, 'anonymous.json');
   }
 
@@ -65,18 +139,7 @@ class SdkAdapter {
       cursor: options?.cursor,
     });
 
-    const items: DramaSummary[] = (res.items || []).map((item: any) => ({
-      id: String(item.id),
-      title: String(item.title || ''),
-      description: String(item.description || ''),
-      coverUrl: String(item.cover_url || ''),
-      coverExpiresAt: item.cover_expires_at,
-      episodeCount: Number(item.episode_count || 0),
-      author: item.author ? String(item.author) : undefined,
-      category: item.category ? String(item.category) : undefined,
-      heat: typeof item.heat === 'number' ? item.heat : undefined,
-      statusText: item.right_text ? String(item.right_text) : undefined,
-    }));
+    const items: DramaSummary[] = (res.items || []).map(normalizeDramaSummary);
 
     return {
       items,
@@ -92,16 +155,7 @@ class SdkAdapter {
       cursor: options?.cursor,
     });
 
-    const items: DramaSummary[] = (res.items || []).map((item: any) => ({
-      id: String(item.id),
-      title: String(item.title || ''),
-      description: String(item.description || ''),
-      coverUrl: String(item.cover_url || ''),
-      coverExpiresAt: item.cover_expires_at,
-      episodeCount: Number(item.episode_count || 0),
-      author: item.author ? String(item.author) : undefined,
-      category: item.category ? String(item.category) : undefined,
-    }));
+    const items: DramaSummary[] = (res.items || []).map(normalizeDramaSummary);
 
     return {
       items,
@@ -115,10 +169,7 @@ class SdkAdapter {
     if (!prefix || !prefix.trim()) return [];
     const client = await this.ensureClient();
     const res = await client.suggest(prefix.trim());
-    return (res || []).map((item: any) => ({
-      text: String(item.text || item.title || item.keyword || ''),
-      keyword: item.keyword ? String(item.keyword) : undefined,
-    }));
+    return (res || []).map(normalizeSuggestionItem);
   }
 
   // 4. 热搜与提示词
@@ -151,18 +202,7 @@ class SdkAdapter {
     const client = await this.ensureClient();
     const s = await client.getSeries(seriesId);
     if (!s) return null;
-    return {
-      id: String(s.id),
-      title: String(s.title || ''),
-      description: String(s.description || ''),
-      coverUrl: String(s.cover_url || ''),
-      coverExpiresAt: s.cover_expires_at,
-      episodeCount: Number(s.episode_count || 0),
-      author: s.author ? String(s.author) : undefined,
-      category: s.category ? String(s.category) : undefined,
-      heat: typeof s.heat === 'number' ? s.heat : undefined,
-      statusText: s.right_text ? String(s.right_text) : undefined,
-    };
+    return normalizeDramaSummary(s);
   }
 
   // 6. 分集查询 (严格游标分页契约: { cursor, pageSize })
@@ -176,16 +216,7 @@ class SdkAdapter {
       pageSize: options?.pageSize || 30,
     });
 
-    const items: EpisodeItem[] = (res.items || []).map((ep: any) => ({
-      id: String(ep.id),
-      seriesId: String(ep.series_id || seriesId),
-      number: Number(ep.number || 0),
-      title: String(ep.title || `第${ep.number}集`),
-      playable: ep.playable !== false,
-      isNew: Boolean(ep.is_new),
-      coverUrl: ep.cover_url ? String(ep.cover_url) : undefined,
-      coverExpiresAt: ep.cover_expires_at,
-    }));
+    const items: EpisodeItem[] = (res.items || []).map((ep: any) => normalizeEpisodeItem(ep, seriesId));
 
     return {
       items,
@@ -207,16 +238,9 @@ class SdkAdapter {
       cursor: options?.cursor,
     });
 
-    const items: RankDramaItem[] = (res.items || []).map((item: any, idx: number) => ({
-      rank: Number(item.rank || idx + 1),
-      seriesId: String(item.series_id || ''),
-      title: String(item.title || ''),
-      coverUrl: String(item.cover_url || ''),
-      score: item.score ? String(item.score) : undefined,
-      actor: item.actor ? String(item.actor) : undefined,
-      episodeCount: item.episode_count ? Number(item.episode_count) : undefined,
-      description: item.description ? String(item.description) : undefined,
-    }));
+    const items: RankDramaItem[] = (res.items || []).map((item: any, idx: number) =>
+      normalizeRankItem(item, idx + 1)
+    );
 
     return {
       items,
@@ -229,28 +253,7 @@ class SdkAdapter {
   public async resolvePlayback(episodeId: string): Promise<PlaybackMediaSource> {
     const client = await this.ensureClient();
     const pbRes = await client.resolvePlayback(episodeId);
-    const pb = pbRes.playback;
-
-    const streams = (pb.streams || []).map((s: any) => ({
-      definition: String(s.definition || 'unknown'),
-      quality: s.quality ? String(s.quality) : undefined,
-      codec: s.codec ? String(s.codec) : undefined,
-      url: String(s.url || ''),
-      backupUrl: s.backup_url ? String(s.backup_url) : undefined,
-      protected: Boolean(s.protected),
-      encryption: s.encryption ? String(s.encryption) : undefined,
-    }));
-
-    return {
-      episodeId: String(pb.episode_id || episodeId),
-      seriesId: '',
-      episodeNumber: 1,
-      protected: Boolean(pb.protected),
-      durationSeconds: Number(pb.duration_seconds || 0),
-      expiresAt: Number(pb.expires_at || 0),
-      streams,
-      audioUrl: pb.audio_url ? String(pb.audio_url) : undefined,
-    };
+    return normalizePlaybackSource(pbRes.playback, episodeId);
   }
 
   public getProfilePath(): string {

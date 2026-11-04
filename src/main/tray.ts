@@ -9,7 +9,7 @@ let tray: TrayType | null = null;
 const TRAY_ICON_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAExJREFUOE9jZKAQMOLB/xkYGBj+ExIMUDBqAIlG41MwGkBgGEAQI/m3AWRbAAnjVzDqgEFrAE7g40uD0QAGowEEXo5i6mUAAL86FQszuGj/AAAAAElFTkSuQmCC';
 
-export function setupSystemTray(mainWindow: BrowserWindowType): TrayType {
+export function setupSystemTray(getWindow: () => BrowserWindowType | null): TrayType {
   if (tray) return tray;
 
   const icon = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL);
@@ -18,21 +18,25 @@ export function setupSystemTray(mainWindow: BrowserWindowType): TrayType {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: '显示 / 隐藏主窗口',
+      label: '显示 / 隐藏窗口',
       click: () => {
-        if (mainWindow.isVisible()) {
-          mainWindow.hide();
+        const win = getWindow();
+        if (!win || win.isDestroyed()) return;
+        if (win.isVisible()) {
+          win.hide();
         } else {
-          mainWindow.show();
-          mainWindow.focus();
+          win.show();
+          win.focus();
         }
       },
     },
     {
-      label: '置顶摸鱼模式 (切换)',
+      label: '主窗口置顶 (摸鱼模式)',
       click: () => {
-        const current = mainWindow.isAlwaysOnTop();
-        mainWindow.setAlwaysOnTop(!current);
+        const win = getWindow();
+        if (!win || win.isDestroyed()) return;
+        const current = win.isAlwaysOnTop();
+        win.setAlwaysOnTop(!current);
       },
     },
     { type: 'separator' },
@@ -47,11 +51,13 @@ export function setupSystemTray(mainWindow: BrowserWindowType): TrayType {
   tray.setContextMenu(contextMenu);
 
   tray.on('click', () => {
-    if (mainWindow.isVisible()) {
-      mainWindow.hide();
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return;
+    if (win.isVisible()) {
+      win.hide();
     } else {
-      mainWindow.show();
-      mainWindow.focus();
+      win.show();
+      win.focus();
     }
   });
 

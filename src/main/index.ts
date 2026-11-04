@@ -1,6 +1,7 @@
 import electron from 'electron';
 import type { BrowserWindow as BrowserWindowType, HandlerDetails } from 'electron';
 import path from 'node:path';
+import url from 'node:url';
 import { fileURLToPath } from 'node:url';
 import { sdkAdapter } from './sdk/adapter.js';
 import { dataStore } from './store/dataStore.js';
@@ -12,6 +13,9 @@ const { app, BrowserWindow, ipcMain, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindowType | null = null;
+
+// 严格限定生产模式可信 origin 为打包目录下的 dist
+const prodDistUrl = url.pathToFileURL(path.resolve(__dirname, '../dist/')).href;
 
 // 验证请求来源的合法性
 function isAuthorizedSender(senderFrame: Electron.WebFrameMain | null): boolean {
@@ -26,14 +30,18 @@ function isAuthorizedSender(senderFrame: Electron.WebFrameMain | null): boolean 
       return false;
     }
   }
-  // 生产模式：只允许 file: 协议
-  return frameUrl.startsWith('file://');
+  // 生产模式：严格限定必须来自打包目录下的 dist 静态资源
+  return frameUrl.startsWith(prodDistUrl);
 }
 
 function assertSender(event: Electron.IpcMainInvokeEvent): void {
   if (!isAuthorizedSender(event.senderFrame)) {
     throw new Error('[Security] Unauthorized IPC invocation from untrusted frame');
   }
+}
+
+export function getMainWindow(): BrowserWindowType | null {
+  return mainWindow;
 }
 
 function createWindow() {
@@ -76,7 +84,7 @@ function createWindow() {
         const allowedOrigin = new URL(process.env.VITE_DEV_SERVER_URL).origin;
         isAllowed = new URL(navigationUrl).origin === allowedOrigin;
       } else {
-        isAllowed = navigationUrl.startsWith('file://');
+        isAllowed = navigationUrl.startsWith(prodDistUrl);
       }
     } catch {
       isAllowed = false;
@@ -111,27 +119,28 @@ function registerIpcHandlers() {
   ipcMain.handle('sdk:getDiscover', async (event, options?: unknown) => {
     assertSender(event);
     const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
-    const channel = typeof opts.channel === 'string' ? opts.channel : undefined;
-    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
+    const channel = typeof opts.channel === 'string' ? opts.channel.slice(0, 50) : undefined;
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor.slice(0, 200) : undefined;
     return await sdkAdapter.getDiscover({ channel, cursor });
   });
 
   // 2. 搜索短剧
   ipcMain.handle('sdk:searchDramas', async (event, query: unknown, options?: unknown) => {
     assertSender(event);
-    if (typeof query !== 'string') {
-      throw new TypeError('[IPC] query must be a string');
+    if (typeof query !== 'string' || !query.trim()) {
+      throw new TypeError('[IPC] query must be a non-empty string');
     }
+    const cleanQuery = query.trim().slice(0, 100);
     const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
-    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
-    return await sdkAdapter.search(query, { cursor });
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor.slice(0, 200) : undefined;
+    return await sdkAdapter.search(cleanQuery, { cursor });
   });
 
   // 3. 搜索联想
   ipcMain.handle('sdk:getSearchSuggestions', async (event, prefix: unknown) => {
     assertSender(event);
     if (typeof prefix !== 'string') return [];
-    return await sdkAdapter.suggest(prefix);
+    return await sdkAdapter.suggest(prefix.slice(0, 50));
   });
 
   // 4. 热搜
@@ -146,28 +155,31 @@ function registerIpcHandlers() {
     if (typeof seriesId !== 'string' || !seriesId.trim()) {
       throw new TypeError('[IPC] seriesId must be a non-empty string');
     }
-    return await sdkAdapter.getSeriesDetail(seriesId.trim());
+    return await sdkAdapter.getSeriesDetail(seriesId.trim().slice(0, 50));
   });
 
-  // 6. 分集查询
+  // 6. 分集查询 (受控分页，防巨型请求)
   ipcMain.handle('sdk:getEpisodes', async (event, seriesId: unknown, options?: unknown) => {
     assertSender(event);
     if (typeof seriesId !== 'string' || !seriesId.trim()) {
       throw new TypeError('[IPC] seriesId must be a non-empty string');
     }
     const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
-    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
-    const pageSize = typeof opts.pageSize === 'number' && opts.pageSize > 0 ? opts.pageSize : undefined;
-    return await sdkAdapter.listEpisodes(seriesId.trim(), { cursor, pageSize });
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor.slice(0, 200) : undefined;
+    const pageSize =
+      typeof opts.pageSize === 'number' && Number.isFinite(opts.pageSize)
+        ? Math.min(100, Math.max(1, Math.floor(opts.pageSize)))
+        : 30;
+    return await sdkAdapter.listEpisodes(seriesId.trim().slice(0, 50), { cursor, pageSize });
   });
 
   // 6.5 短剧排行榜
   ipcMain.handle('sdk:getShortRank', async (event, options?: unknown) => {
     assertSender(event);
     const opts = typeof options === 'object' && options !== null ? (options as Record<string, unknown>) : {};
-    const content = typeof opts.content === 'string' ? opts.content : undefined;
-    const board = typeof opts.board === 'string' ? opts.board : undefined;
-    const cursor = typeof opts.cursor === 'string' ? opts.cursor : undefined;
+    const content = typeof opts.content === 'string' ? opts.content.slice(0, 50) : undefined;
+    const board = typeof opts.board === 'string' ? opts.board.slice(0, 50) : undefined;
+    const cursor = typeof opts.cursor === 'string' ? opts.cursor.slice(0, 200) : undefined;
     return await sdkAdapter.getShortRank({ content, board, cursor });
   });
 
@@ -177,25 +189,68 @@ function registerIpcHandlers() {
     if (typeof episodeId !== 'string' || !episodeId.trim()) {
       throw new TypeError('[IPC] episodeId must be a non-empty string');
     }
-    return await sdkAdapter.resolvePlayback(episodeId.trim());
+    return await sdkAdapter.resolvePlayback(episodeId.trim().slice(0, 50));
   });
 
-  // 7.5 播放会话协调与断点同步
+  // 7.5 播放会话协调与断点同步 (全字段运行时类型安全校验)
   ipcMain.handle('playback:startSession', async (event, session: unknown) => {
     assertSender(event);
     if (!session || typeof session !== 'object') {
       throw new TypeError('[IPC] session must be an object');
     }
-    return await playbackCoordinator.startSession(session as Omit<PlaybackSessionState, 'isPlaying'>);
+    const s = session as Record<string, unknown>;
+    if (typeof s.seriesId !== 'string' || !s.seriesId.trim()) {
+      throw new TypeError('[IPC] session.seriesId must be a non-empty string');
+    }
+    if (typeof s.episodeId !== 'string' || !s.episodeId.trim()) {
+      throw new TypeError('[IPC] session.episodeId must be a non-empty string');
+    }
+    const seriesTitle = typeof s.seriesTitle === 'string' ? s.seriesTitle.slice(0, 200) : '';
+    const episodeTitle = typeof s.episodeTitle === 'string' ? s.episodeTitle.slice(0, 200) : '';
+    const episodeNumber =
+      typeof s.episodeNumber === 'number' && Number.isFinite(s.episodeNumber) ? Math.max(1, Math.floor(s.episodeNumber)) : 1;
+    const positionSeconds =
+      typeof s.positionSeconds === 'number' && Number.isFinite(s.positionSeconds)
+        ? Math.max(0, s.positionSeconds)
+        : 0;
+    const durationSeconds =
+      typeof s.durationSeconds === 'number' && Number.isFinite(s.durationSeconds)
+        ? Math.max(0, s.durationSeconds)
+        : 0;
+
+    return await playbackCoordinator.startSession({
+      seriesId: s.seriesId.trim().slice(0, 50),
+      seriesTitle,
+      episodeId: s.episodeId.trim().slice(0, 50),
+      episodeNumber,
+      episodeTitle,
+      positionSeconds,
+      durationSeconds,
+    });
+  });
+
+  ipcMain.handle('playback:updateStatus', async (event, status: unknown, errorMessage?: unknown) => {
+    assertSender(event);
+    if (typeof status !== 'string') return;
+    const validStatuses = ['idle', 'resolving', 'ready', 'playing', 'paused', 'ended', 'error'];
+    if (!validStatuses.includes(status)) return;
+    const err = typeof errorMessage === 'string' ? errorMessage.slice(0, 500) : undefined;
+    await playbackCoordinator.updateStatus(status as any, err);
   });
 
   ipcMain.handle('playback:updateProgress', async (event, progress: unknown) => {
     assertSender(event);
     if (!progress || typeof progress !== 'object') return;
-    const p = progress as { positionSeconds: number; durationSeconds?: number };
-    if (typeof p.positionSeconds === 'number') {
-      await playbackCoordinator.updateProgress(p);
-    }
+    const p = progress as Record<string, unknown>;
+    if (typeof p.positionSeconds !== 'number' || !Number.isFinite(p.positionSeconds) || p.positionSeconds < 0) return;
+    const dur =
+      typeof p.durationSeconds === 'number' && Number.isFinite(p.durationSeconds) && p.durationSeconds >= 0
+        ? p.durationSeconds
+        : undefined;
+    await playbackCoordinator.updateProgress({
+      positionSeconds: p.positionSeconds,
+      durationSeconds: dur,
+    });
   });
 
   ipcMain.handle('playback:getCurrentSession', async (event) => {
@@ -208,7 +263,7 @@ function registerIpcHandlers() {
     await playbackCoordinator.closeSession();
   });
 
-  // 8. 历史记录
+  // 8. 历史记录 (严格字段校验)
   ipcMain.handle('store:getHistory', async (event) => {
     assertSender(event);
     return await dataStore.getHistory();
@@ -219,11 +274,29 @@ function registerIpcHandlers() {
     if (!item || typeof item !== 'object') {
       throw new TypeError('[IPC] item must be an object');
     }
-    const record = item as Partial<WatchHistoryItem>;
-    if (!record.seriesId || !record.episodeId) {
-      throw new TypeError('[IPC] History item missing seriesId or episodeId');
+    const r = item as Record<string, unknown>;
+    if (typeof r.seriesId !== 'string' || !r.seriesId.trim()) {
+      throw new TypeError('[IPC] History item missing seriesId');
     }
-    return await dataStore.saveHistory(record as WatchHistoryItem);
+    if (typeof r.episodeId !== 'string' || !r.episodeId.trim()) {
+      throw new TypeError('[IPC] History item missing episodeId');
+    }
+
+    const record: WatchHistoryItem = {
+      seriesId: r.seriesId.trim().slice(0, 50),
+      seriesTitle: typeof r.seriesTitle === 'string' ? r.seriesTitle.slice(0, 200) : '',
+      episodeId: r.episodeId.trim().slice(0, 50),
+      episodeNumber: typeof r.episodeNumber === 'number' && Number.isFinite(r.episodeNumber) ? Math.max(1, Math.floor(r.episodeNumber)) : 1,
+      episodeTitle: typeof r.episodeTitle === 'string' ? r.episodeTitle.slice(0, 200) : '',
+      positionSeconds: typeof r.positionSeconds === 'number' && Number.isFinite(r.positionSeconds) ? Math.max(0, r.positionSeconds) : 0,
+      durationSeconds: typeof r.durationSeconds === 'number' && Number.isFinite(r.durationSeconds) ? Math.max(0, r.durationSeconds) : 0,
+      progressPercentage: typeof r.progressPercentage === 'number' && Number.isFinite(r.progressPercentage) ? Math.min(100, Math.max(0, r.progressPercentage)) : 0,
+      updatedAt: typeof r.updatedAt === 'number' && Number.isFinite(r.updatedAt) ? r.updatedAt : Date.now(),
+      cachedCoverUrl: typeof r.cachedCoverUrl === 'string' ? r.cachedCoverUrl.slice(0, 500) : undefined,
+      cachedCoverExpiresAt: typeof r.cachedCoverExpiresAt === 'string' ? r.cachedCoverExpiresAt.slice(0, 50) : undefined,
+    };
+
+    return await dataStore.saveHistory(record);
   });
 
   ipcMain.handle('store:clearHistory', async (event) => {
@@ -231,7 +304,7 @@ function registerIpcHandlers() {
     return await dataStore.clearHistory();
   });
 
-  // 9. 追剧收藏
+  // 9. 追剧收藏 (严格字段校验)
   ipcMain.handle('store:getFavorites', async (event) => {
     assertSender(event);
     return await dataStore.getFavorites();
@@ -242,11 +315,21 @@ function registerIpcHandlers() {
     if (!item || typeof item !== 'object') {
       throw new TypeError('[IPC] item must be an object');
     }
-    const fav = item as Partial<FavoriteItem>;
-    if (!fav.seriesId) {
+    const f = item as Record<string, unknown>;
+    if (typeof f.seriesId !== 'string' || !f.seriesId.trim()) {
       throw new TypeError('[IPC] Favorite item missing seriesId');
     }
-    return await dataStore.toggleFavorite(fav as FavoriteItem);
+
+    const fav: FavoriteItem = {
+      seriesId: f.seriesId.trim().slice(0, 50),
+      seriesTitle: typeof f.seriesTitle === 'string' ? f.seriesTitle.slice(0, 200) : '',
+      cachedCoverUrl: typeof f.cachedCoverUrl === 'string' ? f.cachedCoverUrl.slice(0, 500) : undefined,
+      cachedCoverExpiresAt: typeof f.cachedCoverExpiresAt === 'string' ? f.cachedCoverExpiresAt.slice(0, 50) : undefined,
+      episodeCount: typeof f.episodeCount === 'number' && Number.isFinite(f.episodeCount) ? Math.max(0, Math.floor(f.episodeCount)) : 0,
+      addedAt: typeof f.addedAt === 'number' && Number.isFinite(f.addedAt) ? f.addedAt : Date.now(),
+    };
+
+    return await dataStore.toggleFavorite(fav);
   });
 
   // 10. 窗口控制
@@ -281,9 +364,7 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers();
   createWindow();
-  if (mainWindow) {
-    setupSystemTray(mainWindow);
-  }
+  setupSystemTray(getMainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

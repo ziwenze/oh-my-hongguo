@@ -55,6 +55,11 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastWheelTimestamp = useRef(0);
 
+  // 异步请求时序与去重保护
+  const activeGenerationRef = useRef(0);
+  const inFlightEpisodeIdRef = useRef<string | null>(null);
+  const hasMountedRef = useRef(false);
+
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId) || {
     id: currentEpisodeId,
     seriesId: drama.id,
@@ -74,7 +79,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       onTimeUpdate: (curr, dur) => {
         setCurrentTime(curr);
         setDuration(dur);
-        // 同步进度到主进程协调器
         window.electronAPI.updateSessionProgress({
           positionSeconds: curr,
           durationSeconds: dur,
@@ -82,12 +86,15 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       },
       onPlayStateChange: (playing) => {
         setIsPlaying(playing);
+        window.electronAPI.updateSessionStatus(playing ? 'playing' : 'paused').catch(() => {});
       },
       onEnded: () => {
+        window.electronAPI.updateSessionStatus('ended').catch(() => {});
         handleNextEpisode();
       },
       onError: (err) => {
-        console.warn('[PlayerModal] Video playback error event:', err.message);
+        console.warn('[PlayerModal] Video error event:', err.message);
+        window.electronAPI.updateSessionStatus('error', err.message).catch(() => {});
         setErrorStatus({
           code: 'PLAYBACK_DECODE_ERROR',
           title: '媒体流解码或网络受限',
@@ -108,85 +115,114 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     };
   }, []);
 
-  // 2. 加载选中的分集播放源
-  const loadEpisodePlayback = useCallback(async (episodeId: string, resumeSeconds = 0) => {
-    setIsLoading(true);
-    setErrorStatus(null);
-    setCurrentEpisodeId(episodeId);
-
-    const ep = episodes.find((e) => e.id === episodeId);
-    const epNumber = ep?.number || 1;
-
-    try {
-      // 启动主进程单一会话
-      await window.electronAPI.startSession({
-        seriesId: drama.id,
-        seriesTitle: drama.title,
-        episodeId,
-        episodeNumber: epNumber,
-        episodeTitle: ep?.title || `第${epNumber}集`,
-        positionSeconds: resumeSeconds,
-        durationSeconds: 0,
-      });
-
-      const source = await window.electronAPI.resolvePlaybackSource(episodeId);
-
-      const defs = source.streams.map((s) => s.definition);
-      setAvailableDefinitions(defs);
-
-      // 阶段 0 准入状态检查：若媒体为 CENC 受保护流且缺少授权/解码支持
-      if (source.protected) {
-        setErrorStatus({
-          code: 'DRM_PROTECTED_GATE',
-          title: '受保护媒体 (阶段 0 决策门槛)',
-          message: '该分集包含 CENC 样本级保护与 HEVC (bytevc1) 编码，依据 AGENTS.md 准入要求，受保护媒体须在获得明确播放授权与解码器验证后再行开启。',
-        });
-        setIsLoading(false);
-        return;
+  // 2. 统一切集控制器 (带 generation 防竞态、同集去重与严格状态机)
+  const switchEpisode = useCallback(
+    async (targetEpisodeId: string, resumeSeconds = 0, force = false) => {
+      if (!force && inFlightEpisodeIdRef.current === targetEpisodeId && isLoading) {
+        return; // 重复请求，直接拦截
       }
 
-      // 普通无保护直接流：交给播放器适配器播放
-      if (playerRef.current) {
-        await playerRef.current.load(source, resumeSeconds);
-        setCurrentDefinition(playerRef.current.getCurrentDefinition());
-      }
-    } catch (err: any) {
-      console.warn('[PlayerModal] resolvePlaybackSource error:', err.message);
-      if (err.message && err.message.includes('ANONYMOUS_LIMITED')) {
-        setErrorStatus({
-          code: 'ANONYMOUS_LIMITED',
-          title: '平台访问频控受限',
-          message: '红果平台服务端限制了当前匿名设备的播放模型请求频率，请稍后再试或点击下方重试。',
-        });
-      } else {
-        setErrorStatus({
-          code: 'SOURCE_FETCH_ERROR',
-          title: '播放地址解析失败',
-          message: err.message || '网络请求失败或内容已下架。',
-        });
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [drama, episodes]);
+      const currentGen = ++activeGenerationRef.current;
+      inFlightEpisodeIdRef.current = targetEpisodeId;
+      setCurrentEpisodeId(targetEpisodeId);
+      setIsLoading(true);
+      setErrorStatus(null);
 
+      // 通知父级组件同步选中态
+      onSwitchEpisode(targetEpisodeId);
+
+      const ep = episodes.find((e) => e.id === targetEpisodeId);
+      const epNumber = ep?.number || 1;
+
+      try {
+        // 步骤 A: 启动会话为 resolving 态，不冒充 playing 写入历史
+        await window.electronAPI.startSession({
+          seriesId: drama.id,
+          seriesTitle: drama.title,
+          episodeId: targetEpisodeId,
+          episodeNumber: epNumber,
+          episodeTitle: ep?.title || `第${epNumber}集`,
+          positionSeconds: resumeSeconds,
+          durationSeconds: 0,
+        });
+
+        // 步骤 B: 解析媒体播放模型
+        const source = await window.electronAPI.resolvePlaybackSource(targetEpisodeId);
+
+        // 防竞态检查：若该请求已被后续切集覆盖，立即丢弃
+        if (activeGenerationRef.current !== currentGen) {
+          return;
+        }
+
+        const defs = source.streams.map((s) => s.definition);
+        setAvailableDefinitions(defs);
+
+        // 步骤 C: 阶段 0 准入状态检查：CENC 受保护流
+        if (source.protected) {
+          await window.electronAPI.updateSessionStatus('error', 'DRM_PROTECTED_GATE');
+          setErrorStatus({
+            code: 'DRM_PROTECTED_GATE',
+            title: '受保护媒体 (阶段 0 决策门槛)',
+            message: '该分集包含 CENC 样本级保护与 HEVC (bytevc1) 编码，依据 AGENTS.md 准入要求，受保护媒体须在获得明确播放授权与解码器验证后再行开启。',
+          });
+          setIsLoading(false);
+          inFlightEpisodeIdRef.current = null;
+          return;
+        }
+
+        // 步骤 D: 载入播放器适配器
+        if (playerRef.current) {
+          await playerRef.current.load(source, resumeSeconds);
+          if (activeGenerationRef.current !== currentGen) return;
+          setCurrentDefinition(playerRef.current.getCurrentDefinition());
+          await window.electronAPI.updateSessionStatus('playing');
+        }
+      } catch (err: any) {
+        if (activeGenerationRef.current !== currentGen) return;
+        await window.electronAPI.updateSessionStatus('error', err.message);
+        console.warn('[PlayerModal] resolvePlaybackSource error:', err.message);
+        if (err.message && err.message.includes('ANONYMOUS_LIMITED')) {
+          setErrorStatus({
+            code: 'ANONYMOUS_LIMITED',
+            title: '平台访问频控受限',
+            message: '红果平台服务端限制了当前匿名设备的播放模型请求频率，请稍后再试或点击下方重试。',
+          });
+        } else {
+          setErrorStatus({
+            code: 'SOURCE_FETCH_ERROR',
+            title: '播放地址解析失败',
+            message: err.message || '网络请求失败或内容已下架。',
+          });
+        }
+      } finally {
+        if (activeGenerationRef.current === currentGen) {
+          setIsLoading(false);
+          inFlightEpisodeIdRef.current = null;
+        }
+      }
+    },
+    [drama.id, drama.title, episodes, onSwitchEpisode, isLoading]
+  );
+
+  // 挂载时触发初次加载，避免父级 re-render 引发重复请求
   useEffect(() => {
-    loadEpisodePlayback(initialEpisodeId, initialPosition);
-  }, [initialEpisodeId, loadEpisodePlayback]);
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      switchEpisode(initialEpisodeId, initialPosition);
+    }
+  }, [initialEpisodeId, initialPosition, switchEpisode]);
 
-  // 3. 切集控制
+  // 3. 切集交互入口
   const handlePrevEpisode = () => {
     if (!hasPrev) return;
     const prevEp = episodes[currentIndex - 1];
-    onSwitchEpisode(prevEp.id);
-    loadEpisodePlayback(prevEp.id, 0);
+    switchEpisode(prevEp.id, 0);
   };
 
   const handleNextEpisode = () => {
     if (!hasNext) return;
     const nextEp = episodes[currentIndex + 1];
-    onSwitchEpisode(nextEp.id);
-    loadEpisodePlayback(nextEp.id, 0);
+    switchEpisode(nextEp.id, 0);
   };
 
   // 4. 滚轮防抖切集 (触控板惯性过滤)
@@ -339,7 +375,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
             <p className="text-xs text-muted max-w-xs mb-4 leading-relaxed">{errorStatus.message}</p>
             <div className="flex items-center space-x-2">
               <button
-                onClick={() => loadEpisodePlayback(currentEpisodeId, currentTime)}
+                onClick={() => switchEpisode(currentEpisodeId, currentTime, true)}
                 className="px-3.5 py-1.5 bg-surface hover:bg-surface-hover border border-border rounded-xl text-xs text-gray-200 inline-flex items-center space-x-1 transition-colors"
               >
                 <RefreshCw className="w-3.5 h-3.5 mr-1" />

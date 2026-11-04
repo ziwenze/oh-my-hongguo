@@ -4,78 +4,17 @@ import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DataStore } from '../src/main/store/dataStore.ts';
+import { PlaybackSessionCoordinator } from '../src/main/session/coordinator.ts';
 
-// 模拟主进程会话协调器行为
-class MockPlaybackCoordinator {
-  constructor(dataStore) {
-    this.dataStore = dataStore;
-    this.currentSession = null;
-    this.lastSaveTimestamp = 0;
-  }
-
-  getCurrentSession() {
-    return this.currentSession ? { ...this.currentSession } : null;
-  }
-
-  async startSession(initData) {
-    this.currentSession = {
-      ...initData,
-      isPlaying: true,
-    };
-    await this.syncToHistoryStore();
-    return { ...this.currentSession };
-  }
-
-  async updateProgress(progress) {
-    if (!this.currentSession) return;
-    this.currentSession.positionSeconds = progress.positionSeconds;
-    if (typeof progress.durationSeconds === 'number') {
-      this.currentSession.durationSeconds = progress.durationSeconds;
-    }
-    const now = Date.now();
-    if (now - this.lastSaveTimestamp > 50) {
-      this.lastSaveTimestamp = now;
-      await this.syncToHistoryStore();
-    }
-  }
-
-  async closeSession() {
-    if (this.currentSession) {
-      await this.syncToHistoryStore();
-      this.currentSession = null;
-    }
-  }
-
-  async syncToHistoryStore() {
-    if (!this.currentSession) return;
-    const { seriesId, seriesTitle, episodeId, episodeNumber, episodeTitle, positionSeconds, durationSeconds } =
-      this.currentSession;
-
-    const progressPercentage =
-      durationSeconds > 0 ? Math.min(100, Math.round((positionSeconds / durationSeconds) * 100)) : 0;
-
-    await this.dataStore.saveHistory({
-      seriesId,
-      seriesTitle,
-      episodeId,
-      episodeNumber,
-      episodeTitle,
-      positionSeconds,
-      durationSeconds,
-      progressPercentage,
-      updatedAt: Date.now(),
-    });
-  }
-}
-
-test('PlaybackSessionCoordinator offline unit tests', async (t) => {
-  const testBaseDir = await fs.mkdtemp(path.join(tmpdir(), 'coord_test_'));
+test('PlaybackSessionCoordinator production unit tests', async (t) => {
+  const testBaseDir = await fs.mkdtemp(path.join(tmpdir(), 'coord_real_test_'));
   const ds = new DataStore(testBaseDir);
   await ds.load();
 
-  const coordinator = new MockPlaybackCoordinator(ds);
+  // 直接实例化生产代码中的 PlaybackSessionCoordinator，传入测试 DataStore 与 50ms 节流
+  const coordinator = new PlaybackSessionCoordinator(ds, 50);
 
-  await t.test('1. Starts session and records initial playback to history', async () => {
+  await t.test('1. startSession initializes resolving state and does NOT write fake history yet', async () => {
     const session = await coordinator.startSession({
       seriesId: 'series_99',
       seriesTitle: '短剧99',
@@ -87,28 +26,65 @@ test('PlaybackSessionCoordinator offline unit tests', async (t) => {
     });
 
     assert.equal(session.seriesId, 'series_99');
-    assert.equal(session.isPlaying, true);
+    assert.equal(session.status, 'resolving');
 
     await ds.flushAsync();
     const history = await ds.getHistory();
-    assert.equal(history.length, 1);
+    // 关键断言：resolving 状态不能提前写入历史！
+    assert.equal(history.length, 0, 'Should not write history entry when only in resolving state');
+  });
+
+  await t.test('2. Error status updates state and does not create fake play history', async () => {
+    await coordinator.updateStatus('error', 'DRM_PROTECTED_GATE');
+    const session = coordinator.getCurrentSession();
+    assert.equal(session?.status, 'error');
+    assert.equal(session?.errorMessage, 'DRM_PROTECTED_GATE');
+
+    await ds.flushAsync();
+    const history = await ds.getHistory();
+    assert.equal(history.length, 0, 'Error status without actual playback must not create fake history');
+  });
+
+  await t.test('3. Entering playing status records actual playback to history', async () => {
+    // 重新开启会话并进入 playing 状态
+    await coordinator.startSession({
+      seriesId: 'series_99',
+      seriesTitle: '短剧99',
+      episodeId: 'ep_1',
+      episodeNumber: 1,
+      episodeTitle: '第1集',
+      positionSeconds: 0,
+      durationSeconds: 120,
+    });
+
+    await coordinator.updateStatus('playing');
+    const session = coordinator.getCurrentSession();
+    assert.equal(session?.status, 'playing');
+
+    await ds.flushAsync();
+    const history = await ds.getHistory();
+    assert.equal(history.length, 1, 'Playing status should write history');
     assert.equal(history[0].seriesId, 'series_99');
     assert.equal(history[0].episodeNumber, 1);
   });
 
-  await t.test('2. Progress updates throttle sync to history store', async () => {
-    // 模拟多次微小进度跳动
+  await t.test('4. Progress updates throttle sync to history store and sanitize numbers', async () => {
+    // 模拟多次进度跳动与 NaN 防御
     await coordinator.updateProgress({ positionSeconds: 10, durationSeconds: 120 });
+    // 测试 NaN / 无效值保护
+    await coordinator.updateProgress({ positionSeconds: NaN, durationSeconds: Infinity });
+    assert.equal(coordinator.getCurrentSession()?.positionSeconds, 10);
+
     await new Promise((r) => setTimeout(r, 60)); // 等待超过 50ms 节流门限
-    await coordinator.updateProgress({ positionSeconds: 25, durationSeconds: 120 });
+    await coordinator.updateProgress({ positionSeconds: 25.5, durationSeconds: 120 });
 
     await ds.flushAsync();
     const history = await ds.getHistory();
     assert.equal(history.length, 1);
-    assert.equal(history[0].positionSeconds, 25);
+    assert.equal(history[0].positionSeconds, 25.5);
   });
 
-  await t.test('3. Closing session commits final position', async () => {
+  await t.test('5. Closing session commits final position and clears active session', async () => {
     await coordinator.updateProgress({ positionSeconds: 78.5, durationSeconds: 120 });
     await coordinator.closeSession();
 

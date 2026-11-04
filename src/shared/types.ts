@@ -80,6 +80,9 @@ export interface PlaybackMediaSource {
   audioUrl?: string;
 }
 
+// 播放状态枚举
+export type PlaybackStatus = 'idle' | 'resolving' | 'ready' | 'playing' | 'paused' | 'ended' | 'error';
+
 // 活跃播放会话模型
 export interface PlaybackSessionState {
   seriesId: string;
@@ -89,7 +92,8 @@ export interface PlaybackSessionState {
   episodeTitle: string;
   positionSeconds: number;
   durationSeconds: number;
-  isPlaying: boolean;
+  status: PlaybackStatus;
+  errorMessage?: string;
   expiresAt?: number;
 }
 
@@ -134,7 +138,16 @@ export interface IElectronAPI {
 
   // 播放协调 (阶段 0 决策后接入)
   resolvePlaybackSource(episodeId: string): Promise<PlaybackMediaSource>;
-  startSession(session: Omit<PlaybackSessionState, 'isPlaying'>): Promise<void>;
+  startSession(session: {
+    seriesId: string;
+    seriesTitle: string;
+    episodeId: string;
+    episodeNumber: number;
+    episodeTitle: string;
+    positionSeconds?: number;
+    durationSeconds?: number;
+  }): Promise<PlaybackSessionState>;
+  updateSessionStatus(status: PlaybackStatus, errorMessage?: string): Promise<void>;
   updateSessionProgress(progress: { positionSeconds: number; durationSeconds?: number }): Promise<void>;
   getCurrentSession(): Promise<PlaybackSessionState | null>;
   closeSession(): Promise<void>;

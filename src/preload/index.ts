@@ -14,6 +14,7 @@ const api: IElectronAPI = {
 
   resolvePlaybackSource: (episodeId) => ipcRenderer.invoke('sdk:resolvePlaybackSource', episodeId),
   startSession: (session) => ipcRenderer.invoke('playback:startSession', session),
+  updateSessionStatus: (status, errorMessage) => ipcRenderer.invoke('playback:updateStatus', status, errorMessage),
   updateSessionProgress: (progress) => ipcRenderer.invoke('playback:updateProgress', progress),
   getCurrentSession: () => ipcRenderer.invoke('playback:getCurrentSession'),
   closeSession: () => ipcRenderer.invoke('playback:closeSession'),

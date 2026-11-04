@@ -1,53 +1,117 @@
-import { dataStore } from '../store/dataStore.js';
-import type { PlaybackSessionState, WatchHistoryItem } from '../../shared/types.js';
+import { dataStore } from '../store/dataStore.ts';
+import type { PlaybackSessionState, PlaybackStatus, WatchHistoryItem } from '../../shared/types.ts';
 
-class PlaybackSessionCoordinator {
+export interface IHistorySink {
+  saveHistory(item: WatchHistoryItem): Promise<void>;
+}
+
+export class PlaybackSessionCoordinator {
+  private store: IHistorySink;
   private currentSession: PlaybackSessionState | null = null;
   private lastSaveTimestamp = 0;
+  private hasActuallyPlayed = false;
+  private throttleMs: number;
+
+  constructor(customStore?: IHistorySink, throttleMs = 3000) {
+    this.store = customStore || dataStore;
+    this.throttleMs = throttleMs;
+  }
 
   public getCurrentSession(): PlaybackSessionState | null {
     return this.currentSession ? { ...this.currentSession } : null;
   }
 
-  // 启动或接力播放会话
-  public async startSession(
-    initData: Omit<PlaybackSessionState, 'isPlaying'>
-  ): Promise<PlaybackSessionState> {
+  // 1. 初始化会话 (状态置为 resolving，绝不提前写入虚假播放历史)
+  public async startSession(initData: {
+    seriesId: string;
+    seriesTitle: string;
+    episodeId: string;
+    episodeNumber: number;
+    episodeTitle: string;
+    positionSeconds?: number;
+    durationSeconds?: number;
+  }): Promise<PlaybackSessionState> {
+    const pos =
+      typeof initData.positionSeconds === 'number' && Number.isFinite(initData.positionSeconds)
+        ? Math.max(0, initData.positionSeconds)
+        : 0;
+    const dur =
+      typeof initData.durationSeconds === 'number' && Number.isFinite(initData.durationSeconds)
+        ? Math.max(0, initData.durationSeconds)
+        : 0;
+
+    this.hasActuallyPlayed = pos > 0;
+    this.lastSaveTimestamp = 0;
+
     this.currentSession = {
-      ...initData,
-      isPlaying: true,
+      seriesId: initData.seriesId,
+      seriesTitle: initData.seriesTitle,
+      episodeId: initData.episodeId,
+      episodeNumber: initData.episodeNumber,
+      episodeTitle: initData.episodeTitle,
+      positionSeconds: pos,
+      durationSeconds: dur,
+      status: 'resolving',
     };
 
-    // 同步到本地历史
-    await this.syncToHistoryStore();
     return { ...this.currentSession };
   }
 
-  // 更新播放进度并节流写入历史持久层
+  // 2. 状态机迁移 (仅在实际触发 playing/paused/ended 后才持久化历史)
+  public async updateStatus(status: PlaybackStatus, errorMessage?: string): Promise<void> {
+    if (!this.currentSession) return;
+
+    this.currentSession.status = status;
+    if (errorMessage) {
+      this.currentSession.errorMessage = errorMessage;
+    }
+
+    if (status === 'playing') {
+      this.hasActuallyPlayed = true;
+      await this.syncToHistoryStore();
+    } else if (status === 'paused' || status === 'ended') {
+      if (this.hasActuallyPlayed) {
+        await this.syncToHistoryStore();
+      }
+    }
+  }
+
+  // 3. 更新播放进度并节流写入历史
   public async updateProgress(progress: {
     positionSeconds: number;
     durationSeconds?: number;
   }): Promise<void> {
     if (!this.currentSession) return;
 
-    this.currentSession.positionSeconds = progress.positionSeconds;
-    if (typeof progress.durationSeconds === 'number' && progress.durationSeconds > 0) {
-      this.currentSession.durationSeconds = progress.durationSeconds;
-    }
+    const pos =
+      typeof progress.positionSeconds === 'number' && Number.isFinite(progress.positionSeconds)
+        ? Math.max(0, progress.positionSeconds)
+        : this.currentSession.positionSeconds;
+    const dur =
+      typeof progress.durationSeconds === 'number' && Number.isFinite(progress.durationSeconds)
+        ? Math.max(0, progress.durationSeconds)
+        : this.currentSession.durationSeconds;
 
-    // 每 3 秒节流落盘一次
+    this.currentSession.positionSeconds = pos;
+    this.currentSession.durationSeconds = dur;
+    this.hasActuallyPlayed = true;
+
+    // 节流落盘
     const now = Date.now();
-    if (now - this.lastSaveTimestamp > 3000) {
+    if (now - this.lastSaveTimestamp >= this.throttleMs) {
       this.lastSaveTimestamp = now;
       await this.syncToHistoryStore();
     }
   }
 
-  // 结束会话并确保最终进度持久化
+  // 4. 结束会话并确保最终进度持久化
   public async closeSession(): Promise<void> {
     if (this.currentSession) {
-      await this.syncToHistoryStore();
+      if (this.hasActuallyPlayed) {
+        await this.syncToHistoryStore();
+      }
       this.currentSession = null;
+      this.hasActuallyPlayed = false;
     }
   }
 
@@ -71,7 +135,7 @@ class PlaybackSessionCoordinator {
       updatedAt: Date.now(),
     };
 
-    await dataStore.saveHistory(historyItem).catch((err) => {
+    await this.store.saveHistory(historyItem).catch((err) => {
       console.warn('[Coordinator] Failed to sync history:', err);
     });
   }
