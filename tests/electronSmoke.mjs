@@ -18,7 +18,7 @@ async function run() {
   // 1. 验证构建产物文件存在
   const distHtml = path.join(rootDir, 'dist/index.html');
   const mainJs = path.join(rootDir, 'dist-electron/main.js');
-  const preloadJs = path.join(rootDir, 'dist-electron/preload.js');
+  const preloadJs = path.join(rootDir, 'dist-electron/preload.cjs');
   const wasmFile = path.join(rootDir, 'vendor/openhongguo/dist/openhongguo.wasm');
 
   await fs.access(distHtml);
@@ -76,9 +76,9 @@ async function run() {
   const testUserData = path.join(os.tmpdir(), `ohg_smoke_${Date.now()}`);
   await fs.mkdir(testUserData, { recursive: true });
 
-  const childArgs = ['.'];
+  const childArgs = ['.', '--disable-gpu', `--user-data-dir=${testUserData}`];
   if (process.platform === 'linux') {
-    childArgs.unshift('--no-sandbox');
+    childArgs.push('--no-sandbox', '--disable-dev-shm-usage');
   }
 
   const child = spawn(electronBin, childArgs, {

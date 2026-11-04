@@ -1,6 +1,7 @@
-import electron from 'electron';
 import type { IElectronAPI } from '../shared/types.js';
 
+// Preload 脚本在沙箱环境中通过 CommonJS require('electron') 访问原生 contextBridge 与 ipcRenderer
+const electron = require('electron');
 const { contextBridge, ipcRenderer } = electron;
 
 const api: IElectronAPI = {

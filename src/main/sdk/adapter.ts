@@ -89,13 +89,15 @@ export function normalizePlaybackSource(pb: any, fallbackEpisodeId: string): Pla
 export class SdkAdapter {
   private client: any = null;
   private clientInitPromise: Promise<any> | null = null;
-  private profileDir: string;
-  private profilePath: string;
+  private profileDir!: string;
+  private profilePath!: string;
 
-  constructor() {
-    const baseDir = app?.getPath ? app.getPath('userData') : process.cwd();
-    this.profileDir = path.join(baseDir, 'profile');
-    this.profilePath = path.join(this.profileDir, 'anonymous.json');
+  private ensureProfilePaths(): void {
+    if (!this.profilePath) {
+      const baseDir = process.env.OHG_CONFIG_DIR || (app?.getPath ? app.getPath('userData') : process.cwd());
+      this.profileDir = process.env.OHG_CONFIG_DIR ? process.env.OHG_CONFIG_DIR : path.join(baseDir, 'profile');
+      this.profilePath = path.join(this.profileDir, 'anonymous.json');
+    }
   }
 
   // 并发安全的单例初始化 (共享 in-flight Promise)
@@ -107,6 +109,7 @@ export class SdkAdapter {
     }
 
     this.clientInitPromise = (async () => {
+      this.ensureProfilePaths();
       await fs.mkdir(this.profileDir, { recursive: true, mode: 0o700 });
       process.env.OHG_CONFIG_DIR = this.profileDir;
       const store = fileProfileStore(this.profilePath);
@@ -257,6 +260,7 @@ export class SdkAdapter {
   }
 
   public getProfilePath(): string {
+    this.ensureProfilePaths();
     return this.profilePath;
   }
 }

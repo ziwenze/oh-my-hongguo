@@ -21,10 +21,10 @@ export function createDefaultStore(): StoreSchema {
 }
 
 export class DataStore {
-  private storeDir: string;
-  private filePath: string;
-  private backupPath: string;
-  private tmpPath: string;
+  private storeDir?: string;
+  private filePath!: string;
+  private backupPath!: string;
+  private tmpPath!: string;
   private cache: StoreSchema = createDefaultStore();
   private saveTimeout: NodeJS.Timeout | null = null;
   private isLoaded = false;
@@ -37,15 +37,8 @@ export class DataStore {
   constructor(customDir?: string) {
     if (customDir) {
       this.storeDir = customDir;
-    } else {
-      const app = (electron as any)?.app;
-      const baseDir = app?.getPath ? app.getPath('userData') : process.cwd();
-      this.storeDir = path.join(baseDir, 'data');
+      this.ensurePaths();
     }
-
-    this.filePath = path.join(this.storeDir, 'store.json');
-    this.backupPath = path.join(this.storeDir, 'store.json.bak');
-    this.tmpPath = path.join(this.storeDir, 'store.json.tmp');
 
     // 优雅退出前强制刷盘
     const app = (electron as any)?.app;
@@ -53,6 +46,19 @@ export class DataStore {
       app.on('before-quit', () => {
         this.flushSync();
       });
+    }
+  }
+
+  private ensurePaths(): void {
+    if (!this.filePath) {
+      if (!this.storeDir) {
+        const app = (electron as any)?.app;
+        const baseDir = app?.getPath ? app.getPath('userData') : process.cwd();
+        this.storeDir = path.join(baseDir, 'data');
+      }
+      this.filePath = path.join(this.storeDir, 'store.json');
+      this.backupPath = path.join(this.storeDir, 'store.json.bak');
+      this.tmpPath = path.join(this.storeDir, 'store.json.tmp');
     }
   }
 
@@ -99,7 +105,8 @@ export class DataStore {
 
   public async load(): Promise<void> {
     if (this.isLoaded) return;
-    await fs.mkdir(this.storeDir, { recursive: true, mode: 0o700 });
+    this.ensurePaths();
+    await fs.mkdir(this.storeDir!, { recursive: true, mode: 0o700 });
 
     try {
       const content = await fs.readFile(this.filePath, 'utf8');
@@ -117,7 +124,7 @@ export class DataStore {
       } catch (bakErr) {
         // 主文件和备份均损坏：绝不静默抹除损坏文件，将其重命名留存现场，再重置为空存储
         try {
-          const corruptedPath = path.join(this.storeDir, `store.corrupted.${Date.now()}`);
+          const corruptedPath = path.join(this.storeDir!, `store.corrupted.${Date.now()}`);
           await fs.rename(this.filePath, corruptedPath).catch(() => {});
           console.error('[DataStore] Both main and backup store corrupted. Archived corrupted file to:', corruptedPath);
         } catch {
