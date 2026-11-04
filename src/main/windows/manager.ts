@@ -47,7 +47,7 @@ export class WindowManager {
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 16, y: 16 },
       webPreferences: {
-        preload: path.join(__dirname, '../preload.cjs'),
+        preload: path.join(__dirname, 'preload.cjs'),
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -59,7 +59,7 @@ export class WindowManager {
     if (process.env.VITE_DEV_SERVER_URL) {
       win.loadURL(process.env.VITE_DEV_SERVER_URL);
     } else {
-      win.loadFile(path.join(__dirname, '../../dist/index.html'));
+      win.loadFile(path.join(__dirname, '../dist/index.html'));
     }
 
     win.on('closed', () => {
@@ -99,7 +99,7 @@ export class WindowManager {
       resizable: true,
       skipTaskbar: false,
       webPreferences: {
-        preload: path.join(__dirname, '../preload.cjs'),
+        preload: path.join(__dirname, 'preload.cjs'),
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -128,7 +128,7 @@ export class WindowManager {
     if (process.env.VITE_DEV_SERVER_URL) {
       pip.loadURL(`${process.env.VITE_DEV_SERVER_URL}${query}`);
     } else {
-      pip.loadFile(path.join(__dirname, '../../dist/index.html'), { search: query });
+      pip.loadFile(path.join(__dirname, '../dist/index.html'), { search: query });
     }
 
     pip.on('closed', () => {
