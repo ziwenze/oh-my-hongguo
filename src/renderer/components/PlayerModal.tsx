@@ -12,6 +12,7 @@ import {
   ChevronRight,
   RefreshCw,
   ShieldAlert,
+  ArrowLeft,
 } from 'lucide-react';
 import type { DramaSummary, EpisodeItem, PlaybackSessionToken } from '../../shared/types.js';
 import { WebPlayerAdapter } from '../player/WebPlayerAdapter.js';
@@ -207,7 +208,11 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           return;
         }
 
-        const defs = source.streams.map((s) => s.definition);
+        // 排序可用清晰度：优先置顶 1080p 超清
+        const defRank: Record<string, number> = { '1080p': 5, '720p': 4, '540p': 3, '480p': 2, '360p': 1 };
+        const defs = [...new Set(source.streams.map((s) => s.definition))].sort(
+          (a, b) => (defRank[b] || 0) - (defRank[a] || 0)
+        );
         setAvailableDefinitions(defs);
 
         // 步骤 C: 媒体保护状态检查 (未获取到解密密钥的受保护流)
@@ -228,7 +233,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           await window.electronAPI.updateSessionStatus(token, 'ready');
           await playerRef.current.load(source, resumeSeconds);
           if (activeGenerationRef.current !== currentGen) return;
-          setCurrentDefinition(playerRef.current.getCurrentDefinition());
+          setCurrentDefinition(playerRef.current.getCurrentDefinition() || defs[0] || '1080p');
         }
       } catch (err: any) {
         if (activeGenerationRef.current !== currentGen) return;
@@ -303,6 +308,23 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
   };
 
+  // 全屏切换：调用浏览器标准 Fullscreen API 切换真正的系统级全屏
+  const toggleTrueFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
   // 5. 全局键盘快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -358,11 +380,15 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         case 'f':
         case 'F':
           e.preventDefault();
-          setIsFullscreen((f) => !f);
+          toggleTrueFullscreen();
           break;
         case 'Escape':
           e.preventDefault();
-          onClose();
+          if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+          } else {
+            onClose();
+          }
           break;
       }
     };
@@ -390,17 +416,15 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     <div
       onWheel={handleWheel}
       onMouseMove={triggerControls}
-      className={`fixed inset-0 bg-black/95 backdrop-blur-2xl z-50 flex items-center justify-center select-none overflow-hidden ${
-        isFullscreen ? 'p-0' : 'p-2 sm:p-4'
-      }`}
+      className="fixed inset-0 w-full h-full bg-black z-50 flex flex-col justify-between select-none overflow-hidden"
     >
-      {/* 9:16 短剧视窗容器 */}
+      {/* 居中视窗容器：默认占满当前应用窗口全部空间，左右黑边自适应，双击切换系统全屏，单击切换播放/暂停 */}
       <div
-        className={`relative bg-black rounded-2xl overflow-hidden border border-border/60 shadow-2xl flex flex-col justify-center items-center transition-all duration-200 ${
-          isFullscreen ? 'w-full h-full rounded-none border-none' : 'w-full max-w-[460px] aspect-[9/16] max-h-[92vh]'
-        }`}
+        onClick={() => playerRef.current?.togglePlay()}
+        onDoubleClick={toggleTrueFullscreen}
+        className="relative w-full h-full bg-black flex flex-col justify-center items-center overflow-hidden cursor-pointer"
       >
-        {/* 原生视频元素 (居中 contain 保持画幅) */}
+        {/* 原生视频元素 (居中 contain 保持短剧竖屏画幅) */}
         <video
           ref={videoRef}
           playsInline
@@ -409,20 +433,31 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
         {/* 顶部标题栏浮层 */}
         <div
-          className={`absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 transition-opacity duration-200 ${
-            showControls ? 'opacity-100' : 'opacity-0'
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute top-0 left-0 right-0 p-3.5 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between z-20 transition-opacity duration-200 ${
+            showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         >
-          <div className="flex-1 pr-2">
-            <h3 className="font-bold text-xs text-gray-100 line-clamp-1">{drama.title}</h3>
-            <span className="text-[10px] text-gray-300">
-              第 {currentEpisode.number} 集 · {currentEpisode.title}
-            </span>
+          <div className="flex items-center space-x-2.5 flex-1 pr-3">
+            <button
+              onClick={onClose}
+              title="返回 (Esc)"
+              className="p-1.5 rounded-lg bg-black/60 hover:bg-black/90 text-gray-300 hover:text-white transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className="min-w-0">
+              <h3 className="font-bold text-xs sm:text-sm text-gray-100 line-clamp-1">{drama.title}</h3>
+              <span className="text-[11px] text-gray-400">
+                第 {currentEpisode.number} 集 · {currentEpisode.title}
+              </span>
+            </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-gray-300 hover:text-white transition-colors"
+            title="退出播放 (Esc)"
+            className="p-1.5 rounded-lg bg-black/60 hover:bg-black/90 text-gray-300 hover:text-white transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -485,8 +520,9 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
         {/* 底部控制栏浮层 */}
         <div
-          className={`absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 space-y-2 transition-opacity duration-200 ${
-            showControls ? 'opacity-100' : 'opacity-0'
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute bottom-0 left-0 right-0 p-3 sm:p-4 bg-gradient-to-t from-black/95 via-black/75 to-transparent z-20 space-y-2 transition-opacity duration-200 ${
+            showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         >
           {/* 进度条 */}
@@ -603,9 +639,9 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
               </button>
 
               <button
-                onClick={() => setIsFullscreen((f) => !f)}
-                title="全屏切换 (F)"
-                className="p-1 text-gray-300 hover:text-white"
+                onClick={toggleTrueFullscreen}
+                title={isFullscreen ? '退出全屏 (F / Esc)' : '系统全屏 (F)'}
+                className="p-1 text-gray-300 hover:text-white transition-colors"
               >
                 {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
               </button>

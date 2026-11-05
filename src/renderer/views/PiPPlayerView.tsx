@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Play, Pause, Volume2, VolumeX, RefreshCw } from 'lucide-react';
+import { X, Play, Pause, Volume2, VolumeX, RefreshCw, RotateCcw, RotateCw } from 'lucide-react';
 import type { PlaybackSessionState, PlaybackSessionToken } from '../../shared/types.js';
 import { WebPlayerAdapter } from '../player/WebPlayerAdapter.js';
 
@@ -7,6 +7,7 @@ export const PiPPlayerView: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<WebPlayerAdapter | null>(null);
   const sessionTokenRef = useRef<PlaybackSessionToken | null>(null);
+  const controlsTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [session, setSession] = useState<PlaybackSessionState | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -15,6 +16,27 @@ export const PiPPlayerView: React.FC = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showControls, setShowControls] = useState(true);
+
+  // 控制面板活动感知：鼠标移动或暂停时常驻，播放中 3 秒无操作自动淡出
+  const triggerControls = () => {
+    setShowControls(true);
+    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+    if (isPlaying) {
+      controlsTimerRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+    }
+  };
+
+  useEffect(() => {
+    if (!isPlaying) {
+      setShowControls(true);
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+    } else {
+      triggerControls();
+    }
+  }, [isPlaying]);
 
   useEffect(() => {
     let unmounted = false;
@@ -102,6 +124,7 @@ export const PiPPlayerView: React.FC = () => {
 
     return () => {
       unmounted = true;
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
       unsubCommit();
       adapter.destroy();
       playerRef.current = null;
@@ -118,23 +141,42 @@ export const PiPPlayerView: React.FC = () => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const pos = parseFloat(e.target.value);
+    setCurrentTime(pos);
+    playerRef.current?.seek(pos);
+  };
+
   return (
-    <div className="flex flex-col h-screen w-screen bg-black text-white select-none overflow-hidden relative group">
+    <div
+      onMouseMove={triggerControls}
+      onMouseEnter={triggerControls}
+      onClick={triggerControls}
+      className="flex flex-col h-screen w-screen bg-black text-white select-none overflow-hidden relative"
+    >
       {/* 顶部轻量拖拽栏 */}
-      <div className="drag-region absolute top-0 left-0 right-0 p-2 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between z-30 opacity-0 group-hover:opacity-100 transition-opacity">
-        <span className="text-[10px] text-gray-200 line-clamp-1 font-medium pl-1">
-          {session ? `${session.seriesTitle} · ${session.episodeTitle}` : '正在播放'}
+      <div
+        className={`drag-region absolute top-0 left-0 right-0 p-2.5 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between z-30 transition-opacity duration-200 ${
+          showControls || !isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        <span className="text-[11px] text-gray-200 line-clamp-1 font-semibold pl-1">
+          {session ? `${session.seriesTitle} · ${session.episodeTitle}` : '正在小窗播放'}
         </span>
         <button
           onClick={handleClose}
-          className="no-drag p-1 rounded-md bg-black/60 hover:bg-black/80 text-gray-300 hover:text-white"
+          title="关闭小窗 (返回主窗口)"
+          className="no-drag p-1 rounded-md bg-black/70 hover:bg-red-500/90 text-gray-200 hover:text-white transition-colors"
         >
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      {/* 视频容器 */}
-      <div className="flex-1 flex items-center justify-center bg-black relative">
+      {/* 视频容器 (点击视频居中区域可直接切换暂停/播放) */}
+      <div
+        onClick={() => playerRef.current?.togglePlay()}
+        className="flex-1 flex items-center justify-center bg-black relative cursor-pointer"
+      >
         <video ref={videoRef} playsInline className="w-full h-full object-contain pointer-events-none" />
 
         {isLoading && (
@@ -144,7 +186,7 @@ export const PiPPlayerView: React.FC = () => {
         )}
 
         {errorMsg && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 p-3 text-center">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 p-3 text-center">
             <span className="text-xs text-red-400 font-medium mb-1">播放提示</span>
             <span className="text-[10px] text-gray-300 leading-tight">{errorMsg}</span>
           </div>
@@ -152,30 +194,68 @@ export const PiPPlayerView: React.FC = () => {
       </div>
 
       {/* 底部悬浮控制栏 */}
-      <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/90 to-transparent z-30 opacity-0 group-hover:opacity-100 transition-opacity space-y-1">
-        <div className="flex items-center justify-between text-[9px] text-gray-400">
-          <span>{formatSeconds(currentTime)}</span>
-          <span>{formatSeconds(duration)}</span>
+      <div
+        className={`absolute bottom-0 left-0 right-0 p-2.5 bg-gradient-to-t from-black/95 via-black/75 to-transparent z-30 space-y-1.5 transition-opacity duration-200 ${
+          showControls || !isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        {/* 进度拖拽条 */}
+        <div className="w-full flex items-center space-x-2">
+          <input
+            type="range"
+            min={0}
+            max={duration || 100}
+            step={0.1}
+            value={currentTime}
+            onChange={handleSeek}
+            className="w-full h-1 bg-white/20 hover:bg-white/30 rounded-full appearance-none cursor-pointer accent-primary"
+          />
         </div>
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => playerRef.current?.togglePlay()}
-            className="p-1 rounded bg-primary text-white"
-          >
-            {isPlaying ? <Pause className="w-3 h-3 fill-white" /> : <Play className="w-3 h-3 fill-white" />}
-          </button>
+
+        <div className="flex items-center justify-between text-[10px] text-gray-300">
+          <span>{formatSeconds(currentTime)} / {formatSeconds(duration)}</span>
+
+          {/* 核心操作按钮组 */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => playerRef.current?.seekRelative(-5)}
+              title="快退 5 秒"
+              className="p-1 rounded-md hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              onClick={() => playerRef.current?.togglePlay()}
+              title={isPlaying ? '暂停 (空格)' : '播放 (空格)'}
+              className="w-7 h-7 rounded-full bg-primary hover:bg-primary-hover flex items-center justify-center text-white shadow-md transition-transform active:scale-90"
+            >
+              {isPlaying ? <Pause className="w-3.5 h-3.5 fill-white" /> : <Play className="w-3.5 h-3.5 fill-white ml-0.5" />}
+            </button>
+
+            <button
+              onClick={() => playerRef.current?.seekRelative(5)}
+              title="快进 5 秒"
+              className="p-1 rounded-md hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
           <button
             onClick={() => {
               const nextM = !isMuted;
               setIsMuted(nextM);
               playerRef.current?.setVolume(nextM ? 0 : 1);
             }}
-            className="p-1 text-gray-300 hover:text-white"
+            title={isMuted ? '取消静音' : '静音'}
+            className="p-1 rounded-md hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
           >
-            {isMuted ? <VolumeX className="w-3 h-3 text-red-400" /> : <Volume2 className="w-3 h-3" />}
+            {isMuted ? <VolumeX className="w-3.5 h-3.5 text-red-400" /> : <Volume2 className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
     </div>
   );
 };
+

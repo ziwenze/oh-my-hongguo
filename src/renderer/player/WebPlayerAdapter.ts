@@ -103,10 +103,13 @@ export class WebPlayerAdapter {
       throw new Error('当前分集未返回可用的清晰度流');
     }
 
-    // 默认优先选择清晰度较高且具有 URL 的流
+    // 默认优先选择 1080p 超清，不存在时依次向下降级
     const candidate =
-      source.streams.find((s) => s.definition === '720p' && s.url) ||
       source.streams.find((s) => s.definition === '1080p' && s.url) ||
+      source.streams.find((s) => s.definition === '720p' && s.url) ||
+      source.streams.find((s) => s.definition === '540p' && s.url) ||
+      source.streams.find((s) => s.definition === '480p' && s.url) ||
+      source.streams.find((s) => s.definition === '360p' && s.url) ||
       source.streams[0];
 
     if (!candidate || !candidate.url) {
