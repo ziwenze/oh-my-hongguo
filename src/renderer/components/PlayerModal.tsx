@@ -56,7 +56,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [isHandoffPending, setIsHandoffPending] = useState(false); // 正在独立小窗接力中
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastWheelTimestamp = useRef(0);
 
   // 异步请求时序、代际与会话所有权 Token
   const activeGenerationRef = useRef(0);
@@ -293,21 +292,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   };
   handleNextEpisodeRef.current = handleNextEpisode;
 
-  // 4. 滚轮防抖切集 (触控板惯性过滤)
-  const handleWheel = (e: React.WheelEvent) => {
-    const now = Date.now();
-    // 350ms 防抖 + 最小移动阈值 25 过滤触控板惯性滑动
-    if (now - lastWheelTimestamp.current < 350) return;
-    if (Math.abs(e.deltaY) < 25) return;
-
-    lastWheelTimestamp.current = now;
-    if (e.deltaY > 0) {
-      handleNextEpisode();
-    } else {
-      handlePrevEpisode();
-    }
-  };
-
   // 全屏切换：调用浏览器标准 Fullscreen API 切换真正的系统级全屏
   const toggleTrueFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -414,7 +398,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
   return (
     <div
-      onWheel={handleWheel}
       onMouseMove={triggerControls}
       className="fixed inset-0 w-full h-full bg-black z-50 flex flex-col justify-between select-none overflow-hidden"
     >
