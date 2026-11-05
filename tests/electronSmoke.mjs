@@ -55,6 +55,7 @@ async function run() {
     'toggleFavorite',
     'toggleAlwaysOnTop',
     'getDiagnostics',
+    'openExternal',
     'openPiPWindow',
     'closePiPWindow',
     'isPiPActive',

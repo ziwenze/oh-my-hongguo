@@ -61,6 +61,7 @@ const api: IElectronAPI = {
 
   toggleAlwaysOnTop: () => ipcRenderer.invoke('window:toggleAlwaysOnTop'),
   getDiagnostics: () => ipcRenderer.invoke('system:getDiagnostics'),
+  openExternal: (url) => ipcRenderer.invoke('system:openExternal', url),
   onWindowStateChange: (callback) => {
     const handler = (_: any, state: any) => callback(state);
     ipcRenderer.on('window:stateChange', handler);

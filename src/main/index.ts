@@ -11,7 +11,7 @@ import { setupSystemTray } from './tray.js';
 import { mediaDecryptionServer } from './media/decryptionServer.js';
 import type { FavoriteItem, PlaybackSessionToken, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
 
-const { app, BrowserWindow, ipcMain } = electron;
+const { app, BrowserWindow, ipcMain, shell } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 开启平台硬件解码与 H.265 / HEVC 视频解码支持
@@ -347,7 +347,7 @@ function registerIpcHandlers() {
     return !current;
   });
 
-  // 11. 诊断
+  // 11. 诊断与系统外链
   ipcMain.handle('system:getDiagnostics', async (event): Promise<SystemDiagnostics> => {
     assertSender(event);
     return {
@@ -357,6 +357,19 @@ function registerIpcHandlers() {
       platform: process.platform,
       profilePath: sdkAdapter.getProfilePath(),
     };
+  });
+
+  ipcMain.handle('system:openExternal', async (event, targetUrl: unknown): Promise<boolean> => {
+    assertSender(event);
+    if (typeof targetUrl !== 'string' || !targetUrl) return false;
+    try {
+      const parsed = new URL(targetUrl);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        await shell.openExternal(targetUrl);
+        return true;
+      }
+    } catch {}
+    return false;
   });
 }
 

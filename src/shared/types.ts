@@ -192,6 +192,7 @@ export interface IElectronAPI {
   // 窗口与诊断
   toggleAlwaysOnTop(): Promise<boolean>;
   getDiagnostics(): Promise<SystemDiagnostics>;
+  openExternal(url: string): Promise<boolean>;
   onWindowStateChange(callback: (state: { isMaximized: boolean; isAlwaysOnTop: boolean }) => void): () => void;
 }
 

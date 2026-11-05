@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -70,3 +71,83 @@ jobs:
             release/*.zip
             release/*.exe
           if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Organize release assets & generate checksums
+        run: |
+          mkdir -p release-dist
+          find downloaded-artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" \) -exec cp -v {} release-dist/ \;
+          cd release-dist
+          sha256sum *.dmg *.zip *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-dist/*.dmg
+            release-dist/*.zip
+            release-dist/*.exe
+            release-dist/SHA256SUMS.txt
+          name: "Oh-My-Hongguo ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          body: |
+            # 🚀 Oh-My-Hongguo ${{ github.ref_name }} 正式版发布
+
+            一款简洁、清爽、无广告的高清短剧桌面客户端。  
+            支持 1080p 超清原生画质、独立置顶摸鱼小窗 (PiP) 无缝接力、秒级断点续播与硬件加速实时解密。
+
+            ---
+
+            ### 📥 快速下载专区 (按需自选)
+
+            #### 🪟 Windows 系统 (Windows 10 / 11 x64)
+            - 🟢 **[推荐] Windows 绿色免安装便携版**：
+              👉 **`Oh-My-Hongguo Portable 0.1.0.exe`** (双击直接运行，不写注册表，随身携带，不留痕迹)
+            - 📦 **Windows 完整安装包**：
+              👉 **`Oh-My-Hongguo Setup 0.1.0.exe`** (标准安装向导，桌面/开始菜单自动生成图标，支持控制面板卸载)
+
+            #### 🍎 macOS 系统 (Apple Silicon M系列 & Intel x64)
+            - 💿 **[推荐] macOS DMG 镜像安装包**：
+              👉 **`Oh-My-Hongguo-0.1.0.dmg`** (双击打开并拖拽到 Applications 应用程序目录完成安装)
+            - 🗜️ **macOS 免安装压缩包**：
+              👉 **`Oh-My-Hongguo-0.1.0-mac.zip`** (解压即可直接运行应用)
+
+            ---
+
+            ### 💡 macOS 首次打开拦截提示解决说明
+            由于当前版本尚未接入每年 99 美元的付费苹果开发者证书公证，在现代 macOS（13/14/15）上首次打开若提示“已损坏，无法打开。你应该将它移到废纸篓”，**软件本身 100% 完好无损**。  
+            打开 Mac 自带的 **终端 (Terminal)** 运行以下命令即可秒开：
+            ```bash
+            sudo xattr -rd com.apple.quarantine /Applications/Oh-My-Hongguo.app
+            ```
+            *(如果是直接解压在下载目录，执行：`xattr -cr ~/Downloads/Oh-My-Hongguo.app`)*
+
+            ---
+
+            ### ✨ 核心特性亮点
+            1. **📺 默认 1080p 超清原生画质**：优先加载最高分辨率码流，告别模糊颗粒感；
+            2. **⚡ 原生 CENC 硬件加速实时解密**：底层调用 Node.js AES-NI 指令集就地秒解密（<40ms），支持 HTTP 206 进度随意拖拽快进/快退；
+            3. **🪟 独立置顶摸鱼小窗 (PiP)**：一键开启桌面置顶小窗，主窗小窗单发声屏障，音画无缝接力；
+            4. **📱 满屏沉浸播放与系统全屏**：默认铺满当前窗口，双击/按 F 键进入真正的系统全屏，支持 `Esc` 退出；
+            5. **🔊 可视化音量拖拽与百分比**：播放器与置顶小窗均配备交互式滑块，键盘 `↑`/`↓` 方向键微调百分比实时反馈；
+            6. **🔍 多频道浏览与搜索联想**：精选推荐、真人剧场、动态漫剧、经典专区与全网风云榜单，输入实时联想防串台；
+            7. **💾 本地原子化数据中心**：秒级断点续播历史、一键追剧收藏夹，完全保存在本地磁盘。
+
+            ---
+            *校验和文件 `SHA256SUMS.txt` 附于下载列表，可在下载后校验文件完整性。*
