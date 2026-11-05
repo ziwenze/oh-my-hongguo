@@ -27,16 +27,37 @@
 
 ---
 
-## 二、平台安全策略提示与放行说明 (Gatekeeper & SmartScreen)
+## 二、macOS “已损坏，移到废纸篓” 问题与安全放行指南
 
-> **注意**：Phase 4.3 产物尚未接入苹果公证（Notarization）与 Windows 代码签名证书（这是 Phase 4.4 的工作），系统会弹出安全拦截提示，属于预期内的正常表现。
+> **为什么会提示“已损坏，无法打开。你应该将它移到废纸篓”？**  
+> 1. **系统隔离属性 (`com.apple.quarantine`)**：macOS 对所有通过浏览器（Safari/Chrome/Edge 等）从互联网下载的文件，都会自动加上隔离属性；  
+> 2. **苹果公证机制 (Notarization)**：在现代 macOS（macOS 13 Ventura、macOS 14 Sonoma、macOS 15 Sequoia）上，若下载的应用尚未接入苹果付费开发者证书（Apple Developer ID，$99/年）与官方公证，Gatekeeper 安全机制**不再弹出“未识别的开发者”，而是直接拦截并提示“已损坏，移到废纸篓”**。  
+> **这绝非文件真正损坏或打包丢失**，而是 macOS 针对未公证网络下载软件的标准拦截策略。
 
-### 1. macOS (Gatekeeper 拦截)
-- **首次打开提示**：“无法打开‘Oh-My-Hongguo’，因为 Apple 无法检查其是否包含恶意软件”；
-- **放行方法**：
-  1. 打开“系统设置” ➔ “隐私与安全性” ➔ 滚动到底部；
-  2. 在“已阻止使用‘Oh-My-Hongguo’”右侧，点击 **“仍要打开”**；
-  3. 或在访达中右键单击应用图标，按住 `Control` 键点击 **“打开”**，在弹出警告框中点击 **“打开”**。
+---
+
+### 1. macOS 一键解决命令 (终端执行)
+
+将应用放入 `/Applications`（应用程序目录）后，打开 Mac 自带的 **终端 (Terminal)**，复制并执行以下命令：
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Oh-My-Hongguo.app
+```
+*(输入 Mac 开机密码并回车即可，终端输入密码时不会显示字符)*
+
+**如果应用直接解压在“下载”目录 (`Downloads`)**，可执行：
+```bash
+xattr -cr ~/Downloads/Oh-My-Hongguo.app
+```
+
+**若仍被系统策略拦截，执行综合修复（清除隔离 + 本地补全自签）**：
+```bash
+sudo xattr -cr /Applications/Oh-My-Hongguo.app && sudo codesign --force --deep -s - /Applications/Oh-My-Hongguo.app
+```
+
+执行后，再次双击 `Oh-My-Hongguo` 即可秒开运行！
+
+---
 
 ### 2. Windows 10/11 (SmartScreen 拦截)
 - **首次启动提示**：“Windows 已保护你的电脑 (Microsoft Defender SmartScreen 阻止了无法识别的应用启动)”；
