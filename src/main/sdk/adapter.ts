@@ -240,6 +240,18 @@ export function createMockClient() {
   };
 }
 
+// 跨平台图形兼容设备画像 (使用 Android 8 兼容机型，促使字节跳动 CDN 返回原生可解码的标准 JPEG 封面，避免仅在 Apple 设备支持的 .heic 格式)
+export const COMPAT_DEVICE = {
+  brand: 'Xiaomi',
+  model: 'MI 6',
+  os_version: '8.0.0',
+  os_api: 26,
+  build: 'OPR1.170623.027',
+  resolution: '1080*1920',
+  dpi: 428,
+  channel: 'xiaomi_8662_64',
+};
+
 export class SdkAdapter {
   private client: any = null;
   private clientInitPromise: Promise<any> | null = null;
@@ -284,6 +296,7 @@ export class SdkAdapter {
       const store = fileProfileStore(this.profilePath);
       this.client = await createClient({
         profile: store,
+        device: COMPAT_DEVICE,
         retryAttempts: 2,
       });
       console.log('[SDK Adapter] Openhongguo Wasm client initialized safely at:', this.profilePath);
@@ -303,11 +316,27 @@ export class SdkAdapter {
     return this.client;
   }
 
-  // 1. 发现推荐 (真实透传 channel 与 cursor)
+  // 1. 发现推荐 (真实透传 channel 与 cursor，支持常用别名安全映射与容错兜底)
   public async getDiscover(options?: { channel?: string; cursor?: string }): Promise<PageResult<DramaSummary>> {
     const client = await this.ensureClient();
+    const raw = options?.channel?.trim() || '';
+    let mappedChannel: string | undefined = undefined;
+    if (raw === '真人剧' || raw === 'human' || raw === 'live' || raw === '首页真人剧') {
+      mappedChannel = '真人剧';
+    } else if (raw === '漫剧' || raw === 'comic' || raw === 'comic_series_rank' || raw === '首页漫剧') {
+      mappedChannel = '漫剧';
+    } else if (raw === '经典' || raw === 'classic') {
+      mappedChannel = '经典';
+    } else if (raw === '推荐' || raw === 'featured' || raw === 'recommend' || raw === '') {
+      mappedChannel = undefined;
+    } else {
+      // 容错兜底：未注册别名（如 hot/new/male 等）优雅降级为默认推荐，绝不抛出异常破坏界面
+      console.warn(`[SDK Adapter] Unrecognized discover channel "${raw}", falling back to default recommendation`);
+      mappedChannel = undefined;
+    }
+
     const res = await client.discover({
-      channel: options?.channel && options.channel.trim() ? options.channel.trim() : undefined,
+      channel: mappedChannel,
       cursor: options?.cursor,
     });
 
@@ -421,11 +450,29 @@ export class SdkAdapter {
     };
   }
 
-  // 8. 解析播放模型 (隔离敏感内容密钥，对外输出标准选路 DTO)
+  // 8. 解析播放模型 (隔离敏感内容密钥，对外输出标准选路 DTO，支持单次凭据刷新重试)
   public async resolvePlayback(episodeId: string): Promise<PlaybackMediaSource> {
     const client = await this.ensureClient();
-    const pbRes = await client.resolvePlayback(episodeId);
-    return normalizePlaybackSource(pbRes.playback, episodeId);
+    try {
+      const pbRes = await client.resolvePlayback(episodeId);
+      return normalizePlaybackSource(pbRes.playback, episodeId);
+    } catch (err: any) {
+      // 字节跳动 video_model 针对连续会话设备凭据偶发性返回空响应 (ANONYMOUS_LIMITED: anonymous response was empty)
+      // 执行单次凭证自愈重置并重试，保障播放请求成功率
+      if (err?.message && (err.message.includes('anonymous response was empty') || err.code === 'ANONYMOUS_LIMITED')) {
+        console.warn('[SDK Adapter] Anonymous playback credential exhausted, refreshing device and retrying once...');
+        try {
+          if (typeof client.resetDevice === 'function') {
+            await client.resetDevice();
+          }
+          const retryRes = await client.resolvePlayback(episodeId);
+          return normalizePlaybackSource(retryRes.playback, episodeId);
+        } catch (retryErr: any) {
+          throw retryErr;
+        }
+      }
+      throw err;
+    }
   }
 
   public getProfilePath(): string {

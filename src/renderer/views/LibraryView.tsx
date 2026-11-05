@@ -74,7 +74,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectDrama, onPlayE
                 >
                   <div className="aspect-[3/4] bg-surface-hover relative overflow-hidden">
                     {fav.cachedCoverUrl ? (
-                      <img src={fav.cachedCoverUrl} alt={fav.seriesTitle} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                      <img src={fav.cachedCoverUrl} alt={fav.seriesTitle} referrerPolicy="no-referrer" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-muted">
                         <Film className="w-8 h-8 opacity-40" />

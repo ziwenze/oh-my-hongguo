@@ -150,7 +150,10 @@ export const SearchModal: React.FC<SearchModalProps> = ({ onSelectDrama }) => {
             {suggestions.map((sug, i) => (
               <div
                 key={i}
-                onClick={() => executeSearch(sug.keyword || sug.text)}
+                onClick={() => {
+                  setSuggestions([]);
+                  executeSearch(sug.text);
+                }}
                 className="px-3.5 py-2 text-xs hover:bg-surface-hover cursor-pointer border-b border-border/40 last:border-b-0 flex items-center justify-between transition-colors"
               >
                 <span className="text-gray-200 font-medium">{sug.text}</span>

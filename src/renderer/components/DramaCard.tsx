@@ -35,6 +35,7 @@ export const DramaCard: React.FC<DramaCardProps> = ({ drama, onClick }) => {
           <img
             src={drama.coverUrl}
             alt={drama.title}
+            referrerPolicy="no-referrer"
             onError={() => setImageError(true)}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             loading="lazy"

@@ -236,11 +236,18 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           await window.electronAPI.updateSessionStatus(sessionTokenRef.current, 'error', err.message);
         }
         console.warn('[PlayerModal] resolvePlaybackSource error:', err.message);
-        if (err.message && err.message.includes('ANONYMOUS_LIMITED')) {
+        const isAnonLimited = Boolean(
+          err?.message && (
+            err.message.includes('ANONYMOUS_LIMITED') ||
+            err.message.includes('anonymous response was empty') ||
+            err.message.includes('rate limited')
+          )
+        );
+        if (isAnonLimited) {
           setErrorStatus({
             code: 'ANONYMOUS_LIMITED',
             title: '平台访问频控受限',
-            message: '红果平台服务端限制了当前匿名设备的播放模型请求频率，请稍后再试或点击下方重试。',
+            message: '红果平台限制了当前匿名设备/IP的播放模型请求频率（ANONYMOUS_LIMITED）。请稍候再试，或点击重试。',
           });
         } else {
           setErrorStatus({

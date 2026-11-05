@@ -12,11 +12,9 @@ interface DiscoverViewProps {
 
 const CHANNELS = [
   { id: '', label: '精选推荐' },
-  { id: 'hot', label: '短剧榜单' },
-  { id: 'new', label: '新剧抢先' },
-  { id: 'female', label: '女生偏好' },
-  { id: 'male', label: '男生热血' },
-  { id: 'comic', label: '动态漫剧' },
+  { id: '真人剧', label: '真人剧场' },
+  { id: '漫剧', label: '动态漫剧' },
+  { id: '经典', label: '经典专区' },
 ];
 
 export const DiscoverView: React.FC<DiscoverViewProps> = ({ onSelectDrama, onOpenSearch, searchCue }) => {

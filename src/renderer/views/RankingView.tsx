@@ -145,7 +145,7 @@ export const RankingView: React.FC<RankingViewProps> = ({ onSelectDrama }) => {
                 {/* 海报封面 */}
                 <div className="w-12 h-16 rounded-lg bg-surface-hover overflow-hidden relative mr-3 flex-shrink-0">
                   {item.coverUrl ? (
-                    <img src={item.coverUrl} alt={item.title} className="w-full h-full object-cover" />
+                    <img src={item.coverUrl} alt={item.title} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-muted">
                       <Film className="w-5 h-5 opacity-40" />
