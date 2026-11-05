@@ -13,6 +13,7 @@ export const PiPPlayerView: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -122,14 +123,64 @@ export const PiPPlayerView: React.FC = () => {
       console.warn('[PiP] ackPiPReady warning:', err);
     });
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      triggerControls();
+      switch (e.key) {
+        case ' ':
+          e.preventDefault();
+          playerRef.current?.togglePlay();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          playerRef.current?.seekRelative(-5);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          playerRef.current?.seekRelative(5);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          setIsMuted(false);
+          setVolume((v) => {
+            const nv = Math.min(1, Math.round((v + 0.05) * 100) / 100);
+            playerRef.current?.setVolume(nv);
+            return nv;
+          });
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          setVolume((v) => {
+            const nv = Math.max(0, Math.round((v - 0.05) * 100) / 100);
+            playerRef.current?.setVolume(nv);
+            return nv;
+          });
+          break;
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          setIsMuted((m) => {
+            const nextM = !m;
+            playerRef.current?.setVolume(nextM ? 0 : volume);
+            return nextM;
+          });
+          break;
+        case 'Escape':
+          e.preventDefault();
+          window.electronAPI.closePiPWindow().catch(() => {});
+          break;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
     return () => {
       unmounted = true;
       if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+      window.removeEventListener('keydown', handleKeyDown);
       unsubCommit();
       adapter.destroy();
       playerRef.current = null;
     };
-  }, []);
+  }, [volume]);
 
   const handleClose = async () => {
     await window.electronAPI.closePiPWindow();
@@ -242,17 +293,35 @@ export const PiPPlayerView: React.FC = () => {
             </button>
           </div>
 
-          <button
-            onClick={() => {
-              const nextM = !isMuted;
-              setIsMuted(nextM);
-              playerRef.current?.setVolume(nextM ? 0 : 1);
-            }}
-            title={isMuted ? '取消静音' : '静音'}
-            className="p-1 rounded-md hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
-          >
-            {isMuted ? <VolumeX className="w-3.5 h-3.5 text-red-400" /> : <Volume2 className="w-3.5 h-3.5" />}
-          </button>
+          {/* 音量调节组 */}
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={() => {
+                const nextM = !isMuted;
+                setIsMuted(nextM);
+                playerRef.current?.setVolume(nextM ? 0 : volume);
+              }}
+              title={isMuted ? '取消静音 (M)' : `静音 (M) - 当前 ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+              className="p-1 rounded-md hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+            >
+              {isMuted || volume === 0 ? <VolumeX className="w-3.5 h-3.5 text-red-400" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={isMuted ? 0 : volume}
+              onChange={(e) => {
+                const nv = parseFloat(e.target.value);
+                setVolume(nv);
+                if (nv > 0 && isMuted) setIsMuted(false);
+                playerRef.current?.setVolume(nv);
+              }}
+              title={`音量: ${Math.round((isMuted ? 0 : volume) * 100)}% (↑/↓)`}
+              className="w-12 h-1 bg-white/20 hover:bg-white/30 rounded-full appearance-none cursor-pointer accent-primary"
+            />
+          </div>
         </div>
       </div>
     </div>

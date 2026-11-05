@@ -330,8 +330,9 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           break;
         case 'ArrowUp':
           e.preventDefault();
+          setIsMuted(false);
           setVolume((v) => {
-            const nv = Math.min(1, v + 0.05);
+            const nv = Math.min(1, Math.round((v + 0.05) * 100) / 100);
             playerRef.current?.setVolume(nv);
             return nv;
           });
@@ -339,7 +340,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         case 'ArrowDown':
           e.preventDefault();
           setVolume((v) => {
-            const nv = Math.max(0, v - 0.05);
+            const nv = Math.max(0, Math.round((v - 0.05) * 100) / 100);
             playerRef.current?.setVolume(nv);
             return nv;
           });
@@ -552,17 +553,40 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
-              <button
-                onClick={() => {
-                  const nextM = !isMuted;
-                  setIsMuted(nextM);
-                  playerRef.current?.setVolume(nextM ? 0 : volume);
-                }}
-                title={isMuted ? '取消静音 (M)' : '静音 (M)'}
-                className="p-1 hover:text-primary ml-1"
-              >
-                {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
-              </button>
+              {/* 音量调节组：静音切换 + 拖拽滑块 + 百分比显示 */}
+              <div className="flex items-center space-x-1.5 ml-1">
+                <button
+                  onClick={() => {
+                    const nextM = !isMuted;
+                    setIsMuted(nextM);
+                    playerRef.current?.setVolume(nextM ? 0 : volume);
+                  }}
+                  title={isMuted ? '取消静音 (M)' : `静音 (M)`}
+                  className="p-1 hover:text-primary transition-colors"
+                >
+                  {isMuted || volume === 0 ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={isMuted ? 0 : volume}
+                  onChange={(e) => {
+                    const nv = parseFloat(e.target.value);
+                    setVolume(nv);
+                    if (nv > 0 && isMuted) {
+                      setIsMuted(false);
+                    }
+                    playerRef.current?.setVolume(nv);
+                  }}
+                  title={`音量: ${Math.round((isMuted ? 0 : volume) * 100)}% (↑/↓)`}
+                  className="w-16 sm:w-20 h-1 bg-white/20 hover:bg-white/30 rounded-full appearance-none cursor-pointer accent-primary"
+                />
+                <span className="text-[10px] text-gray-400 w-8 select-none font-mono">
+                  {Math.round((isMuted ? 0 : volume) * 100)}%
+                </span>
+              </div>
             </div>
 
             {/* 清晰度与倍速选项 */}
