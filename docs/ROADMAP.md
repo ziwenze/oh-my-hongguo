@@ -62,12 +62,16 @@
   1. 接入两层 Media Engine：
      - 主进程 `PlaybackSessionCoordinator`（Session Token 凭证鉴权、单活跃会话、时效调度、无虚假历史防范）；
      - 渲染层 `WebPlayerAdapter`（标准 HTML5 播放适配器，代际隔离，requestVideoFrameCallback 首帧测量）；
-  2. 视窗形态实现：
+  2. 实现本地高性能 CENC 实时流解密代理 (`MediaDecryptionServer` + `cencDecrypter`)：
+     - 基于 Node.js 原生底层 AES-NI 指令集就地解密 `cenc-aes-ctr` 密文样本 (< 50ms) 并重写还原标准 MP4 容器格式；
+     - 注入 Chromium `PlatformHEVCDecoderSupport` 硬件加速标志，Windows 与 macOS 原生硬件解码 H.265 (`bytevc1`) 码流；
+     - 实现标准 HTTP 206 `Range: bytes` 分片流式响应，支持视频进度随意拖拽快进/快退；
+  3. 视窗形态实现：
      - 9:16 竖屏模式（主窗口自由缩放，视频居中 contain 保持画幅）；
      - 宽屏剧场模式；
      - 独立置顶摸鱼小窗（`alwaysOnTop`，独立 BrowserWindow，Prepare/Commit/Ack/Rollback 双向接力协议）；
-  3. 短剧专属交互：滚轮防抖切集、键盘全功能快捷键、触控板惯性位移过滤；
-  4. 秒级断点续播历史记录与追剧收藏夹联动。
+  4. 短剧专属交互：滚轮防抖切集、键盘全功能快捷键、触控板惯性位移过滤；
+  5. 秒级断点续播历史记录与追剧收藏夹联动。
 - **准出验收标准**：
   - [x] **[CI Verified]** 主窗口与置顶小窗实现完整的 Prepare ➔ Commit ➔ Ack / Rollback 握手协议，单发声屏障保障音画不重叠；
   - [x] **[CI Verified]** 快捷键响应灵敏，非文本输入状态下空格暂停、方向键调音量精确触发；

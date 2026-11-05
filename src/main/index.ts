@@ -8,10 +8,16 @@ import { dataStore } from './store/dataStore.js';
 import { playbackCoordinator } from './session/coordinator.js';
 import { WindowManager } from './windows/manager.js';
 import { setupSystemTray } from './tray.js';
+import { mediaDecryptionServer } from './media/decryptionServer.js';
 import type { FavoriteItem, PlaybackSessionToken, SystemDiagnostics, WatchHistoryItem } from '../shared/types.js';
 
 const { app, BrowserWindow, ipcMain } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 开启平台硬件解码与 H.265 / HEVC 视频解码支持
+if (app?.commandLine) {
+  app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport,HardwareAcceleratedVideoDecode');
+}
 
 // 安全设置 userData 目录，隔离在独立空间，避免 Chromium 默认路径权限冲突
 if (app) {
@@ -357,6 +363,7 @@ function registerIpcHandlers() {
 app.whenReady().then(async () => {
   try {
     await dataStore.load();
+    await mediaDecryptionServer.start();
     await sdkAdapter.init();
   } catch (err) {
     console.error('[Main] Initialization warning:', err);
@@ -615,6 +622,7 @@ app.on('before-quit', () => {
   // 严格顺序协调：先提交活跃会话的最终断点，再安全刷写持久层并关闭
   playbackCoordinator.closeSessionSync();
   dataStore.closeSync();
+  mediaDecryptionServer.stop();
 });
 
 app.on('window-all-closed', () => {

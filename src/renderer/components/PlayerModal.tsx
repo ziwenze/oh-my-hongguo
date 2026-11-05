@@ -210,13 +210,13 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         const defs = source.streams.map((s) => s.definition);
         setAvailableDefinitions(defs);
 
-        // 步骤 C: 阶段 0 准入状态检查：CENC 受保护流
+        // 步骤 C: 媒体保护状态检查 (未获取到解密密钥的受保护流)
         if (source.protected) {
           await window.electronAPI.updateSessionStatus(token, 'error', 'DRM_PROTECTED_GATE');
           setErrorStatus({
             code: 'DRM_PROTECTED_GATE',
-            title: '受保护媒体 (阶段 0 决策门槛)',
-            message: '该分集包含 CENC 样本级保护与 HEVC (bytevc1) 编码，依据 AGENTS.md 准入要求，受保护媒体须在获得明确播放授权与解码器验证后再行开启。',
+            title: '媒体缺少解密密钥',
+            message: '该分集包含未授权的 DRM 保护，当前未取得有效解密密钥。',
           });
           setIsLoading(false);
           inFlightEpisodeIdRef.current = null;

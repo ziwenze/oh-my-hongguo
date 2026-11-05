@@ -75,7 +75,7 @@ export const PiPPlayerView: React.FC = () => {
           if (unmounted) return;
 
           if (source.protected) {
-            setErrorMsg('受保护媒体需待阶段 0 准入授权');
+            setErrorMsg('该分集缺少解密密钥');
             setIsLoading(false);
             window.electronAPI.reportPiPPlaybackError(newToken, 'DRM_PROTECTED_GATE').catch(() => {});
             return;

@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { mediaDecryptionServer } from '../media/decryptionServer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -450,12 +451,12 @@ export class SdkAdapter {
     };
   }
 
-  // 8. 解析播放模型 (隔离敏感内容密钥，对外输出标准选路 DTO，支持单次凭据刷新重试)
+  // 8. 解析播放模型 (对加密流使用本地流解密代理透明解密，对外输出可直接播放的免解密流 DTO，支持单次凭据刷新重试)
   public async resolvePlayback(episodeId: string): Promise<PlaybackMediaSource> {
     const client = await this.ensureClient();
+    let pbRes: any = null;
     try {
-      const pbRes = await client.resolvePlayback(episodeId);
-      return normalizePlaybackSource(pbRes.playback, episodeId);
+      pbRes = await client.resolvePlayback(episodeId);
     } catch (err: any) {
       // 字节跳动 video_model 针对连续会话设备凭据偶发性返回空响应 (ANONYMOUS_LIMITED: anonymous response was empty)
       // 执行单次凭证自愈重置并重试，保障播放请求成功率
@@ -465,14 +466,32 @@ export class SdkAdapter {
           if (typeof client.resetDevice === 'function') {
             await client.resetDevice();
           }
-          const retryRes = await client.resolvePlayback(episodeId);
-          return normalizePlaybackSource(retryRes.playback, episodeId);
+          pbRes = await client.resolvePlayback(episodeId);
         } catch (retryErr: any) {
           throw retryErr;
         }
+      } else {
+        throw err;
       }
-      throw err;
     }
+
+    const normalized = normalizePlaybackSource(pbRes.playback, episodeId);
+
+    // 若流受 CENC 保护且成功获取了内容密钥，接入本地透明解密流代理
+    if (pbRes.contentKey?.key && pbRes.playback?.protected) {
+      const keyHex = pbRes.contentKey.key;
+      return {
+        ...normalized,
+        protected: false, // 经本地代理实时解密，播放器可直接播放
+        streams: normalized.streams.map((s) => ({
+          ...s,
+          url: mediaDecryptionServer.registerStream(s.url, keyHex),
+          protected: false,
+        })),
+      };
+    }
+
+    return normalized;
   }
 
   public getProfilePath(): string {
